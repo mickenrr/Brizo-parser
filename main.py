@@ -5,8 +5,8 @@ import json as _json
 import logging
 import os
 import random
-import signal
 import sys
+import threading
 import time
 from collections import defaultdict
 
@@ -44,6 +44,21 @@ load_dotenv()
 
 class CaptchaDetected(Exception):
     """Raised when Checko returns 429 / blocks the request (captcha required)."""
+
+
+# Shared pause flag: set = running, clear = paused (captcha).
+# app.py signals resume by writing "RESUME\n" to main.py's stdin.
+pause_event = threading.Event()
+
+
+def _stdin_resume_watcher() -> None:
+    """Daemon thread: watches stdin for RESUME command from app.py."""
+    try:
+        for line in sys.stdin:
+            if line.strip() == "RESUME":
+                pause_event.set()
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -412,6 +427,9 @@ def main() -> None:
         "rejected": defaultdict(int),
     }
 
+    pause_event.set()  # start unpaused
+    threading.Thread(target=_stdin_resume_watcher, daemon=True).start()
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -558,8 +576,8 @@ def main() -> None:
                     log.warning("  КАПЧА/БЛОКИРОВКА Checko — ставим парсер на паузу")
                     _emit("captcha_detected", lead_name=lead_name)
                     time.sleep(1.5)  # дать SSE-стриму время доставить событие до браузера
-                    os.kill(os.getpid(), signal.SIGSTOP)
-                    # Возобновились после SIGCONT пользователем
+                    pause_event.clear()   # блокируем цикл до команды RESUME от app.py
+                    pause_event.wait()    # ← ждём нажатия кнопки «Продолжить» в браузере
                     log.info("  Возобновили работу — ждём 30 сек перед повтором лида")
                     time.sleep(30)
                     # Не увеличиваем i — повторяем тот же лид

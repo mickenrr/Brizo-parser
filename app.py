@@ -78,8 +78,9 @@ def start():
                 ['python3', 'main.py', '--limit', str(limit)],
                 cwd=PARSER_DIR, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE,
                 text=True, bufsize=1,
-                start_new_session=True,  # собственная группа → SIGSTOP/SIGCONT по pgid
+                start_new_session=True,
             )
             run['proc'] = proc
             for raw in iter(proc.stdout.readline, ''):
@@ -133,10 +134,18 @@ def pause_run(run_id):
 
 @app.route('/resume/<run_id>', methods=['POST'])
 def resume_run(run_id):
-    ok = _send_signal(run_id, signal.SIGCONT)
-    if ok and run_id in _runs:
+    _send_signal(run_id, signal.SIGCONT)  # на случай ручной паузы через SIGSTOP
+    run = _runs.get(run_id)
+    proc = run.get('proc') if run else None
+    if run_id in _runs:
         _runs[run_id]['paused'] = False
-    return jsonify(ok=ok, paused=_runs.get(run_id, {}).get('paused', False))
+    if proc and run and not run.get('done'):
+        try:
+            proc.stdin.write('RESUME\n')
+            proc.stdin.flush()
+        except Exception:
+            pass
+    return jsonify(ok=True, paused=False)
 
 
 @app.route('/stop/<run_id>', methods=['POST'])
@@ -831,8 +840,6 @@ es.addEventListener('pipeline', function(e) {
   }
 
   if (evt.type === 'captcha_detected') {
-    console.log('КАПЧА СОБЫТИЕ ПОЛУЧЕНО');
-    alert('Checko просит капчу! Откройте checko.ru и пройдите проверку, затем нажмите Продолжить');
     isPaused = true;
     _updateControls();
     document.getElementById('captchaOverlay').classList.add('visible');
