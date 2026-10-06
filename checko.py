@@ -77,6 +77,7 @@ _last_429: bool = False
 # Флаг «Checko заблокировал запрос» — True когда _get() вернул None из-за 429,
 # а не просто потому что компания не найдена. Сбрасывается в get_company_data().
 _request_blocked: bool = False
+_network_error: bool = False
 
 
 def consume_429() -> bool:
@@ -87,8 +88,13 @@ def consume_429() -> bool:
 
 
 def was_request_blocked() -> bool:
-    """Вернуть True если последний get_company_data() завершился блокировкой (429)."""
+    """Вернуть True если последний get_company_data() завершился блокировкой (429 или капча)."""
     return _request_blocked
+
+
+def was_network_error() -> bool:
+    """Вернуть True если последний get_company_data() упал из-за таймаута/обрыва соединения."""
+    return _network_error
 
 
 def _load_proxies() -> None:
@@ -365,6 +371,7 @@ def _get(url: str, retries: int = 3, referer: str | None = None) -> requests.Res
     """
     # ── Попытка 1: curl UA, прямой запрос (работает даже при банах на Chrome UA) ──
     _saw_429 = False
+    _had_exc = False
     try:
         resp = _CURL_SESSION.get(url, timeout=20, allow_redirects=True)
         if resp.status_code == 200:
@@ -385,7 +392,7 @@ def _get(url: str, retries: int = 3, referer: str | None = None) -> requests.Res
         else:
             referer = BASE_URL + "/"
 
-    global _use_proxy_mode, _request_blocked
+    global _use_proxy_mode, _request_blocked, _network_error
     headers = {"Referer": referer, "Sec-Fetch-Site": "same-origin"}
     for attempt in range(1, retries + 1):
         try:
@@ -420,6 +427,7 @@ def _get(url: str, retries: int = 3, referer: str | None = None) -> requests.Res
             return resp
         except requests.RequestException as e:
             print(f"[checko] GET {url} attempt {attempt}/{retries} failed: {e}")
+            _had_exc = True
             if _use_proxy_mode:
                 rotate_proxy()
             if attempt < retries:
@@ -445,6 +453,8 @@ def _get(url: str, retries: int = 3, referer: str | None = None) -> requests.Res
 
     if _saw_429:
         _request_blocked = True
+    elif _had_exc:
+        _network_error = True
     return None
 
 
@@ -504,7 +514,7 @@ def _resolve_url(inn: str) -> str | None:
         return None
 
     def _goto_and_find(target_url: str) -> str | None:
-        global _request_blocked
+        global _request_blocked, _network_error
         try:
             print(f"[checko] browser goto: {target_url}")
             page.goto(target_url, timeout=30_000, wait_until="domcontentloaded")
@@ -524,6 +534,7 @@ def _resolve_url(inn: str) -> str | None:
             return _company_url_from_page()
         except Exception as e:
             print(f"[checko] goto failed ({target_url}): {e}")
+            _network_error = True
             return None
 
     print(f"[checko] ищем по ИНН {inn}")
@@ -846,6 +857,7 @@ def _get_income_tax_from_taxes_page(company_url: str) -> tuple[list[int], int | 
     Why: the main company page aggregates/rounds tax data and can show
     incorrect amounts. The /taxes/data page (ФНС open data) is authoritative.
     """
+    global _request_blocked, _network_error
     # Extract OGRN (13–15 digits at end of slug, e.g. "slug-name-1027739714606")
     ogrn_m = re.search(r"-(\d{13,15})$", company_url.rstrip("/"))
     if not ogrn_m:
@@ -891,6 +903,7 @@ def _get_income_tax_from_taxes_page(company_url: str) -> tuple[list[int], int | 
             resp = _taxes_get()
         except requests.RequestException as e:
             print(f"[checko] taxes/data request failed: {e}")
+            _network_error = True
             return [], []
 
     if resp is not None and resp.status_code == 429:
@@ -906,7 +919,13 @@ def _get_income_tax_from_taxes_page(company_url: str) -> tuple[list[int], int | 
             resp = _PlaywrightResponse(br.text(), taxes_url, br.status)
         except Exception as e:
             print(f"[checko] taxes/data browser request failed: {e}")
+            _network_error = True
             return [], []
+
+    if resp.status_code == 200 and _is_captcha_html(resp.text):
+        print(f"[checko] ⚠️ КАПЧА на /taxes/data: {taxes_url}")
+        _request_blocked = True
+        return [], []
 
     if resp.status_code != 200:
         # 404 = no tax page (госструктуры, иностранные юрлица и т.п.) — норма
@@ -975,6 +994,9 @@ def get_company_data_from_url(url: str, inn: str = "", fetch_taxes: bool = True)
             extract INN quickly before the duplicate check — saves one HTTP request
             for every company that turns out to be a duplicate).
     """
+    global _request_blocked, _network_error
+    _request_blocked = False
+    _network_error = False
     url = url.split("#")[0]  # strip fragment anchors like #taxes
     print(f"[checko] fetching direct URL {url}")
     resp = _get(url)
@@ -1083,8 +1105,9 @@ def get_company_data(inn: str) -> dict:
         checko_url, revenue, taxes_total, income_tax_exists, income_tax_amount,
         director_name, director_inn, founders (list), website, emails, inn
     """
-    global _request_blocked
+    global _request_blocked, _network_error
     _request_blocked = False  # сбросить перед каждым поиском
+    _network_error = False
 
     inn = inn.strip()
     if not inn:

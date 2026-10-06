@@ -310,6 +310,11 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
     revenue    = company.get("revenue")
     income_tax = company.get("income_tax_amounts") or []
 
+    # Капча на /taxes/data не даёт исключения, а возвращает данные без налога —
+    # без этой проверки лид уйдёт в квалификацию и будет закрыт как «мало налогов».
+    if checko_module.was_request_blocked():
+        raise CaptchaDetected(inn)
+
     log.info("  Чекко: выручка=%s  налог на прибыль=%s",
              _fmt(revenue), [_fmt(t) for t in income_tax[:3]])
 
