@@ -38,6 +38,7 @@ from brizo import (
 import checko as checko_module
 from checko import get_company_data, get_lpr_contacts, get_timezone_comment
 from qualifier import qualify_company
+from skolkovo import check_skolkovo
 
 load_dotenv()
 
@@ -335,6 +336,13 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
         return ("rejected", reason)
 
     stats["qualified"] += 1
+
+    # ── f.2. Проверка Сколково/IT-льготы ─────────────────────────────────
+    skolkovo_eligible, skolkovo_reason = check_skolkovo(name, company)
+    if skolkovo_eligible:
+        log.info("  🎯 Сколково: %s", skolkovo_reason)
+        _pause(0.3, 0.7)
+        add_comment(page, lead_id, f"🎯 Сколково: {skolkovo_reason}")
 
     # ── f.5. Проверка на дубли по ИНН ────────────────────────────────────
     if check_duplicate_by_inn(inn, lead_id):
