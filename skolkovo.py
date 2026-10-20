@@ -98,15 +98,25 @@ def check_skolkovo(
             },
             json={
                 "model": OPENROUTER_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 200,
+                "messages": [
+                    {"role": "system", "content": "Отвечай кратко. Только JSON. Без лишних рассуждений."},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": 1500,
             },
             timeout=30,
         )
         resp.raise_for_status()
 
-        content = resp.json()["choices"][0]["message"].get("content")
-        result   = _parse_json_response(content)
+        msg     = resp.json()["choices"][0]["message"]
+        content = msg.get("content")
+        reasoning = msg.get("reasoning") or ""
+        log.info("  Сколково RAW content: %s", str(content)[:300])
+        if not content:
+            log.info("  Сколково RAW reasoning (последние 300): %s", reasoning[-300:])
+
+        # Читаем content, при null — ищем JSON в reasoning (reasoning-модели)
+        result = _parse_json_response(content) or _parse_json_response(reasoning)
         eligible = bool(result.get("eligible", False))
         reason   = str(result.get("reason", "Ошибка разбора ответа"))
         log.info("  Сколково: eligible=%s  reason=%s", eligible, reason)
