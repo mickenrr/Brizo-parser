@@ -13,26 +13,30 @@ log = logging.getLogger(__name__)
 OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL = "minimax/minimax-m3.1-flash:free"
 
-_PROMPT_TEMPLATE = """Ты эксперт по налоговым льготам. Определи есть ли у компании '{name}' признаки для получения льгот по статье 284.1 НК РФ (IT-компании) или резидентства Сколково.
+_SYSTEM_PROMPT = "You are an expert analyst determining if Russian companies qualify for Skolkovo innovation center membership. Respond ONLY with valid JSON object. No explanations, no markdown."
 
-Сайт компании: {website}
-Email домен: {email_domain}
-Данные компании: {data}
-Текст с сайта компании (если есть): {site_text}
+_USER_PROMPT_TEMPLATE = """Проанализируй компанию на соответствие критериям Сколково.
 
-На основе названия компании, сайта, домена и текста сайта определи вероятность наличия инновационной деятельности.
+Компания: {name}
+Сайт: {website}
+Текст с сайта: {site_text}
 
-Критерии (достаточно одного):
-1. Есть патенты на изобретения/полезные модели
-2. Получали инновационные гранты (Сколково, РФРИТ, Фонд Бортника и др.)
-3. Собственное ПО зарегистрировано в реестре Минцифры
-4. Уникальная технология или рецептура собственной разработки
-5. Собственный R&D отдел с конструкторской документацией
+Критерии Сколково (нужно хотя бы одно):
+- Собственное ПО зарегистрировано в реестре Минцифры (reestr.digital.gov.ru)
+- Патенты на изобретения или полезные модели
+- Собственная уникальная технология/рецептура с конструкторской документацией и НИОКР
+- Инновационные гранты от государства (Фонд Бортника, РНФ, РФФИ)
+- Производство собственного оборудования с серийными номерами, не копия чужого
 
-Отвечай ТОЛЬКО в формате JSON:
-{{"eligible": true/false, "reason": "краткое объяснение на русском (1-2 предложения)"}}
+НЕ подходят:
+- Перепродажа чужого ПО или оборудования
+- Заказная разработка без своего продукта
+- Системный интегратор
+- Контрактное производство по чертежам заказчика
 
-Если данных недостаточно — отвечай {{"eligible": false, "reason": "Недостаточно данных для анализа"}}"""
+На основе текста сайта сделай вывод. Если текст сайта пустой — анализируй по названию компании.
+
+Ответь JSON: {{"eligible": true/false, "reason": "одно предложение с конкретным обоснованием"}}"""
 
 
 def _fetch_site_text(url: str) -> str:
@@ -109,11 +113,9 @@ def check_skolkovo(
     if site_text:
         log.info("  Сколково: загружено %d слов с сайта %s", len(site_text.split()), website)
 
-    prompt = _PROMPT_TEMPLATE.format(
+    prompt = _USER_PROMPT_TEMPLATE.format(
         name=company_name,
         website=website or "не указан",
-        email_domain=_extract_email_domain(email),
-        data=json.dumps(company_data, ensure_ascii=False, default=str),
         site_text=site_text or "не доступен",
     )
 
@@ -127,7 +129,7 @@ def check_skolkovo(
             json={
                 "model": OPENROUTER_MODEL,
                 "messages": [
-                    {"role": "system", "content": "Отвечай кратко. Только JSON. Без лишних рассуждений."},
+                    {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 "max_tokens": 1500,
