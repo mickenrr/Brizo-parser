@@ -6,6 +6,7 @@ import os
 import re
 
 import requests
+from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
 
@@ -17,8 +18,9 @@ _PROMPT_TEMPLATE = """Ты эксперт по налоговым льготам
 Сайт компании: {website}
 Email домен: {email_domain}
 Данные компании: {data}
+Текст с сайта компании (если есть): {site_text}
 
-На основе названия компании, сайта и домена определи вероятность наличия инновационной деятельности.
+На основе названия компании, сайта, домена и текста сайта определи вероятность наличия инновационной деятельности.
 
 Критерии (достаточно одного):
 1. Есть патенты на изобретения/полезные модели
@@ -31,6 +33,27 @@ Email домен: {email_domain}
 {{"eligible": true/false, "reason": "краткое объяснение на русском (1-2 предложения)"}}
 
 Если данных недостаточно — отвечай {{"eligible": false, "reason": "Недостаточно данных для анализа"}}"""
+
+
+def _fetch_site_text(url: str) -> str:
+    """Загрузить сайт и вернуть первые 500 слов из <p> тегов. При любой ошибке — пустая строка."""
+    if not url:
+        return ""
+    try:
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        r = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"}, verify=False)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        words = []
+        for p in soup.find_all("p"):
+            words.extend(p.get_text(" ", strip=True).split())
+            if len(words) >= 500:
+                break
+        return " ".join(words[:500])
+    except Exception as exc:
+        log.debug("  Сколково: не удалось загрузить сайт %s — %s", url, exc)
+        return ""
 
 
 def _extract_email_domain(email: str | None) -> str:
@@ -82,11 +105,16 @@ def check_skolkovo(
         log.debug("OPENROUTER_API_KEY не задан — пропускаем Сколково-проверку")
         return (False, "OPENROUTER_API_KEY не задан")
 
+    site_text = _fetch_site_text(website or "")
+    if site_text:
+        log.info("  Сколково: загружено %d слов с сайта %s", len(site_text.split()), website)
+
     prompt = _PROMPT_TEMPLATE.format(
         name=company_name,
         website=website or "не указан",
         email_domain=_extract_email_domain(email),
         data=json.dumps(company_data, ensure_ascii=False, default=str),
+        site_text=site_text or "не доступен",
     )
 
     try:
