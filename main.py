@@ -341,10 +341,10 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
     skolkovo_eligible, skolkovo_reason = check_skolkovo(
         name, company, website=deal_website or None, email=deal_email or None
     )
-    if skolkovo_eligible:
-        log.info("  🎯 Сколково: %s", skolkovo_reason)
-        _pause(0.3, 0.7)
-        add_comment(page, lead_id, f"🎯 Сколково: {skolkovo_reason}")
+    skolkovo_emoji = "🎯" if skolkovo_eligible else "❌"
+    log.info("  %s Сколково: %s", skolkovo_emoji, skolkovo_reason)
+    _pause(0.3, 0.7)
+    add_comment(page, lead_id, f"{skolkovo_emoji} Сколково: {skolkovo_reason}")
 
     # ── f.5. Проверка на дубли по ИНН ────────────────────────────────────
     if check_duplicate_by_inn(inn, lead_id):
