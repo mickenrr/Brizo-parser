@@ -8,8 +8,9 @@ warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 load_dotenv()
 
-REVENUE_LIMIT  = 1_000_000_000   # 1 млрд руб.
-INCOME_TAX_MIN = 5_000_000       # 5 млн руб. — хотя бы раз за последние 3 года
+REVENUE_LIMIT    = 1_000_000_000   # 1 млрд руб.
+NET_PROFIT_LIMIT = 300_000_000    # 300 млн руб. — порог чистой прибыли для «ярда»
+INCOME_TAX_MIN   = 4_000_000      # 4 млн руб. — хотя бы раз за последние 3 года
 MODEL          = "claude-haiku-4-5"
 
 
@@ -60,10 +61,14 @@ def qualify_company(
     advanced_finance — расширенные критерии (transport_tax_min и т.п.); 0 = не проверять.
     """
 
-    # 1. Выручка — должна быть ниже порога (если известна)
-    revenue = company_data.get("revenue")
+    # 1. Выручка > 1 млрд — отклоняем только если чистая прибыль тоже >= 300 млн.
+    # Если прибыль неизвестна (None) — считаем крупной и отклоняем.
+    # Если прибыль < 300 млн — компания ещё не «выросла», оставляем.
+    revenue    = company_data.get("revenue")
+    net_profit = company_data.get("net_profit")
     if revenue is not None and revenue >= revenue_max:
-        return (False, "Интересные, но ярд")
+        if net_profit is None or net_profit >= NET_PROFIT_LIMIT:
+            return (False, "Интересные, но ярд")
 
     # 2. Налог на прибыль — по правилу из настроек
     amounts = company_data.get("income_tax_amounts") or []
