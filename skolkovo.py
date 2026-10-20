@@ -9,7 +9,7 @@ import requests
 log = logging.getLogger(__name__)
 
 OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
+OPENROUTER_MODEL = "minimax/minimax-m3.1-flash:free"
 
 _PROMPT_TEMPLATE = """Ты эксперт по налоговым льготам. Определи есть ли у компании '{name}' признаки для получения льгот по статье 284.1 НК РФ (IT-компании) или резидентства Сколково.
 
