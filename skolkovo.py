@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 
 import requests
 
@@ -13,7 +14,11 @@ OPENROUTER_MODEL = "minimax/minimax-m3.1-flash:free"
 
 _PROMPT_TEMPLATE = """Ты эксперт по налоговым льготам. Определи есть ли у компании '{name}' признаки для получения льгот по статье 284.1 НК РФ (IT-компании) или резидентства Сколково.
 
+Сайт компании: {website}
+Email домен: {email_domain}
 Данные компании: {data}
+
+На основе названия компании, сайта и домена определи вероятность наличия инновационной деятельности.
 
 Критерии (достаточно одного):
 1. Есть патенты на изобретения/полезные модели
@@ -28,7 +33,46 @@ _PROMPT_TEMPLATE = """Ты эксперт по налоговым льготам
 Если данных недостаточно — отвечай {{"eligible": false, "reason": "Недостаточно данных для анализа"}}"""
 
 
-def check_skolkovo(company_name: str, company_data: dict) -> tuple[bool, str]:
+def _extract_email_domain(email: str | None) -> str:
+    """Извлечь домен из первого email-адреса."""
+    if not email:
+        return "не указан"
+    first = email.replace(";", ",").split(",")[0].strip()
+    if "@" in first:
+        return first.split("@")[1].strip()
+    return "не указан"
+
+
+def _parse_json_response(raw: str | None) -> dict:
+    """Извлечь JSON из ответа модели, устойчиво к обёрткам и мусору."""
+    if not raw:
+        return {}
+    # Убираем блоки ```json ... ```
+    if "```" in raw:
+        parts = raw.split("```")
+        if len(parts) > 1:
+            raw = parts[1].lstrip("json").strip()
+    # Пробуем прямой json.loads
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    # Ищем первый {...} через regex
+    m = re.search(r'\{.*?\}', raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def check_skolkovo(
+    company_name: str,
+    company_data: dict,
+    website: str | None = None,
+    email: str | None = None,
+) -> tuple[bool, str]:
     """Проверить компанию на признаки Сколково/IT-льгот через OpenRouter LLM.
 
     Returns (eligible, reason).
@@ -40,6 +84,8 @@ def check_skolkovo(company_name: str, company_data: dict) -> tuple[bool, str]:
 
     prompt = _PROMPT_TEMPLATE.format(
         name=company_name,
+        website=website or "не указан",
+        email_domain=_extract_email_domain(email),
         data=json.dumps(company_data, ensure_ascii=False, default=str),
     )
 
@@ -58,16 +104,11 @@ def check_skolkovo(company_name: str, company_data: dict) -> tuple[bool, str]:
             timeout=30,
         )
         resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
 
-        # Извлекаем JSON (модель иногда оборачивает в ```json ... ```)
-        if "```" in raw:
-            parts = raw.split("```")
-            raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
-
-        result   = json.loads(raw)
+        content = resp.json()["choices"][0]["message"].get("content")
+        result   = _parse_json_response(content)
         eligible = bool(result.get("eligible", False))
-        reason   = str(result.get("reason", ""))
+        reason   = str(result.get("reason", "Ошибка разбора ответа"))
         log.info("  Сколково: eligible=%s  reason=%s", eligible, reason)
         return (eligible, reason)
 

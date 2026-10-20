@@ -338,7 +338,9 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
     stats["qualified"] += 1
 
     # ── f.2. Проверка Сколково/IT-льготы ─────────────────────────────────
-    skolkovo_eligible, skolkovo_reason = check_skolkovo(name, company)
+    skolkovo_eligible, skolkovo_reason = check_skolkovo(
+        name, company, website=deal_website or None, email=deal_email or None
+    )
     if skolkovo_eligible:
         log.info("  🎯 Сколково: %s", skolkovo_reason)
         _pause(0.3, 0.7)
