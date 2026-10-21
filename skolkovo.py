@@ -118,24 +118,29 @@ def _fetch_site_text(url: str) -> str:
         return ""
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-    try:
-        pw_page = _get_pw_page()
-        if pw_page is not None:
+    pw_page = _get_pw_page()
+    if pw_page is not None:
+        try:
             pw_page.goto(url, timeout=15_000)
             pw_page.wait_for_load_state("domcontentloaded")
             text = pw_page.inner_text("body")
-        else:
-            r = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"}, verify=False)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
-            text = " ".join(
-                p.get_text(" ", strip=True)
-                for p in soup.find_all("p")
-            )
+            words = text.split()
+            result = " ".join(words[:600])
+            log.info("  Сколково: загружено %d слов с сайта %s", len(words[:600]), url)
+            return result
+        except Exception as exc:
+            log.info("  Сколково: сайт недоступен через Playwright (%s): %s", url, type(exc).__name__)
+    try:
+        r = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"}, verify=False)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        text = " ".join(p.get_text(" ", strip=True) for p in soup.find_all("p"))
         words = text.split()
-        return " ".join(words[:600])
+        result = " ".join(words[:600])
+        log.info("  Сколково: загружено %d слов с сайта %s", len(words[:600]), url)
+        return result
     except Exception as exc:
-        log.debug("  Сколково: не удалось загрузить сайт %s — %s", url, exc)
+        log.info("  Сколково: сайт недоступен совсем (%s)", url)
         return ""
 
 
@@ -190,8 +195,6 @@ def check_skolkovo(
         return (False, "OPENROUTER_API_KEY не задан")
 
     site_text = _fetch_site_text(website or "")
-    if site_text:
-        log.info("  Сколково: загружено %d слов с сайта %s", len(site_text.split()), website)
 
     datanewton_text = _fetch_datanewton(inn or "")
     if datanewton_text:
