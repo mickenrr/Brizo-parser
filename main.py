@@ -339,7 +339,7 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
 
     # ── f.2. Проверка Сколково/IT-льготы ─────────────────────────────────
     skolkovo_eligible, skolkovo_reason = check_skolkovo(
-        name, company, website=deal_website or None, email=deal_email or None
+        name, company, website=deal_website or None, email=deal_email or None, inn=inn or None
     )
     skolkovo_emoji = "✅" if skolkovo_eligible else "❌"
     log.info("  %s Сколково: %s", skolkovo_emoji, skolkovo_reason)

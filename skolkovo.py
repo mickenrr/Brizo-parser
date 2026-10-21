@@ -20,6 +20,7 @@ _USER_PROMPT_TEMPLATE = """Определи, подходит ли компан�
 Компания: {name}
 Сайт: {website}
 Текст с сайта: {site_text}
+Данные с datanewton.ru (патенты и гранты): {datanewton_text}
 
 Критерии «подходит» (достаточно одного):
 — Патент на изобретение или полезную модель
@@ -56,6 +57,44 @@ _USER_PROMPT_TEMPLATE = """Определи, подходит ли компан�
 
 Если текст сайта пустой — делай вывод только по названию компании.
 Ответь JSON: {{"eligible": true/false, "reason": "ДВЕ части через точку: 1) чем занимается компания (одна фраза, конкретно: что производит/продаёт/делает); 2) почему подходит или не подходит под Сколково (одна фраза с конкретной причиной). Пример eligible=false: 'Строительно-монтажные услуги в электроэнергетике. Не подходит — сервисная компания без собственных разработок.' Пример eligible=true: 'Производит ПЦР-наборы и реагенты для диагностики in vitro. Подходит — собственная разработка медизделий с производством.'"}}"""
+
+
+def _fetch_datanewton(inn: str) -> str:
+    """Запросить datanewton.ru и вернуть сводку по упоминаниям патентов и грантов."""
+    if not inn:
+        return ""
+    try:
+        r = requests.get(
+            f"https://datanewton.ru/company/{inn}",
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        text = soup.get_text(" ", strip=True).lower()
+
+        patent_keywords = ["патент", "изобретение", "полезная модель", "свидетельство"]
+        grant_keywords  = ["грант", "рффи", "бортника", "сколково", "минпромторг", "рнф"]
+
+        patent_count = sum(text.count(kw) for kw in patent_keywords)
+        grant_matches = [kw for kw in grant_keywords if kw in text]
+
+        patent_part = f"Патенты: найдено упоминаний ({patent_count})." if patent_count else "Патенты: не найдено."
+
+        if grant_matches:
+            display_map = {
+                "грант": "грант", "рффи": "РФФИ", "бортника": "Фонд Бортника",
+                "сколково": "Сколково", "минпромторг": "Минпромторг", "рнф": "РНФ",
+            }
+            labels = [display_map.get(m, m) for m in grant_matches]
+            grant_part = f"Гранты: найдено ({len(grant_matches)} — {', '.join(labels)})."
+        else:
+            grant_part = "Гранты: не найдено."
+
+        return f"{patent_part} {grant_part}"
+    except Exception as exc:
+        log.debug("  Сколково: не удалось загрузить datanewton.ru/%s — %s", inn, exc)
+        return ""
 
 
 def _fetch_site_text(url: str) -> str:
@@ -118,6 +157,7 @@ def check_skolkovo(
     company_data: dict,
     website: str | None = None,
     email: str | None = None,
+    inn: str | None = None,
 ) -> tuple[bool, str]:
     """Проверить компанию на признаки Сколково/IT-льгот через OpenRouter LLM.
 
@@ -132,10 +172,15 @@ def check_skolkovo(
     if site_text:
         log.info("  Сколково: загружено %d слов с сайта %s", len(site_text.split()), website)
 
+    datanewton_text = _fetch_datanewton(inn or "")
+    if datanewton_text:
+        log.info("  Сколково datanewton: %s", datanewton_text)
+
     prompt = _USER_PROMPT_TEMPLATE.format(
         name=company_name,
         website=website or "не указан",
         site_text=site_text or "не доступен",
+        datanewton_text=datanewton_text or "нет данных",
     )
 
     try:
