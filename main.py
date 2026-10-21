@@ -38,7 +38,7 @@ from brizo import (
 import checko as checko_module
 from checko import get_company_data, get_lpr_contacts, get_timezone_comment
 from qualifier import qualify_company
-from skolkovo import check_skolkovo
+from skolkovo import check_skolkovo, set_pw_page as set_skolkovo_pw_page
 
 load_dotenv()
 
@@ -477,6 +477,9 @@ def main() -> None:
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
         page = context.new_page()
+        # Separate page for fetching company websites in skolkovo.py (JS/Cloudflare sites)
+        site_fetch_page = context.new_page()
+        set_skolkovo_pw_page(site_fetch_page)
         # Block analytics/tracking scripts that cause load-event hangs in headless mode
         def _block_analytics(route):
             if any(d in route.request.url for d in ["yandex.ru", "mail.ru", "tg-desk.com"]):

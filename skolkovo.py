@@ -13,6 +13,19 @@ log = logging.getLogger(__name__)
 OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL = "minimax/minimax-m3.1-flash:free"
 
+# Playwright page injected from main.py (avoids nesting two sync_playwright contexts).
+# If not injected, _fetch_site_text falls back to requests.get.
+_site_pw_page = None
+
+
+def set_pw_page(page) -> None:
+    global _site_pw_page
+    _site_pw_page = page
+
+
+def _get_pw_page():
+    return _site_pw_page
+
 _SYSTEM_PROMPT = 'You are an analyst determining if Russian companies qualify for Skolkovo innovation center. Respond ONLY with valid JSON: {"eligible": true/false, "reason": "one sentence in Russian"}'
 
 _USER_PROMPT_TEMPLATE = """Определи, подходит ли компания под Сколково.
@@ -98,21 +111,29 @@ def _fetch_datanewton(inn: str) -> str:
 
 
 def _fetch_site_text(url: str) -> str:
-    """Загрузить сайт и вернуть первые 500 слов из <p> тегов. При любой ошибке — пустая строка."""
+    """Загрузить сайт через Playwright (JS-сайты, Cloudflare) и вернуть первые 600 слов.
+    Если Playwright-страница не инжектирована — fallback на requests.get.
+    При любой ошибке — пустая строка."""
     if not url:
         return ""
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
     try:
-        if not url.startswith(("http://", "https://")):
-            url = "https://" + url
-        r = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"}, verify=False)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        words = []
-        for p in soup.find_all("p"):
-            words.extend(p.get_text(" ", strip=True).split())
-            if len(words) >= 500:
-                break
-        return " ".join(words[:500])
+        pw_page = _get_pw_page()
+        if pw_page is not None:
+            pw_page.goto(url, timeout=15_000)
+            pw_page.wait_for_load_state("domcontentloaded")
+            text = pw_page.inner_text("body")
+        else:
+            r = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"}, verify=False)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "html.parser")
+            text = " ".join(
+                p.get_text(" ", strip=True)
+                for p in soup.find_all("p")
+            )
+        words = text.split()
+        return " ".join(words[:600])
     except Exception as exc:
         log.debug("  Сколково: не удалось загрузить сайт %s — %s", url, exc)
         return ""
