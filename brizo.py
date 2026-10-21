@@ -54,8 +54,8 @@ _LEGAL_PREFIXES = (
     "НЕКОММЕРЧЕСКОЕ", "АВТОНОМНАЯ", "ПРОИЗВОДСТВЕННЫЙ",
 )
 
-TIMEOUT = 60_000
-LONG    = 90_000
+TIMEOUT = 90_000
+LONG    = 240_000
 POLL_INTERVAL = 2    # seconds between kanban load checks
 POLL_MAX      = 40   # total seconds to wait for kanban
 
@@ -1528,11 +1528,19 @@ def _open_deal(page: Page, lead_id: str, force: bool = False) -> None:
         # Go via the deals board first when switching between deals.
         # Direct hash-to-hash navigation leaves the previous popup in the DOM
         # during the Vue.js transition, causing stale-popup overlap bugs.
-        if "deal/" in page.url:
-            page.goto(f"{BRIZO_URL}/cabinet/deals", timeout=TIMEOUT, wait_until="domcontentloaded")
-            time.sleep(1.5)
-        page.goto(f"{BRIZO_URL}/cabinet/deals#{target_hash}", timeout=TIMEOUT)
-        time.sleep(3)  # SPA needs time to render the popup
+        def _navigate() -> None:
+            if "deal/" in page.url:
+                page.goto(f"{BRIZO_URL}/cabinet/deals", timeout=TIMEOUT, wait_until="domcontentloaded")
+                time.sleep(1.5)
+            page.goto(f"{BRIZO_URL}/cabinet/deals#{target_hash}", timeout=TIMEOUT)
+            time.sleep(3)  # SPA needs time to render the popup
+
+        try:
+            _navigate()
+        except PlaywrightTimeout:
+            log.warning("  Навигация к сделке #%s зависла — retry через 5 сек", lead_id)
+            time.sleep(5)
+            _navigate()  # raises PlaywrightTimeout again if retry also fails
 
     # Dismiss any modal overlay that might block clicks
     try:

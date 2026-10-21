@@ -600,8 +600,8 @@ def main() -> None:
                     time.sleep(30)
                     # Не увеличиваем i — повторяем тот же лид
                 except PlaywrightTimeout as exc:
-                    log.error(
-                        "Playwright timeout для лида %s: %s",
+                    log.warning(
+                        "Playwright timeout для лида %s (retry исчерпан): %s",
                         lead.get("id"), exc,
                     )
                     stats["errors"] += 1
