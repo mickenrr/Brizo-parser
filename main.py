@@ -338,8 +338,17 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
     stats["qualified"] += 1
 
     # ── f.2. Проверка Сколково/IT-льготы ─────────────────────────────────
+    # Если сайт не указан, но есть корпоративная почта — берём домен из неё
+    skolkovo_website = deal_website or None
+    if not skolkovo_website and deal_email:
+        for _em in [e.strip() for e in deal_email.replace(";", ",").split(",") if e.strip() and "@" in e]:
+            if is_corporate_email(_em):
+                skolkovo_website = "https://" + _em.split("@")[1].strip()
+                log.info("  Сколково: сайт не указан — используем домен из почты %s → %s", _em, skolkovo_website)
+                break
+
     skolkovo_eligible, skolkovo_reason = check_skolkovo(
-        name, company, website=deal_website or None, email=deal_email or None, inn=inn or None
+        name, company, website=skolkovo_website, email=deal_email or None, inn=inn or None
     )
     skolkovo_emoji = "✅" if skolkovo_eligible else "❌"
     log.info("  %s Сколково: %s", skolkovo_emoji, skolkovo_reason)
