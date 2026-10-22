@@ -38,13 +38,67 @@ from brizo import (
 import checko as checko_module
 from checko import get_company_data, get_lpr_contacts, get_timezone_comment
 from qualifier import qualify_company
-from skolkovo import check_skolkovo, set_pw_page as set_skolkovo_pw_page
+from skolkovo import (
+    check_skolkovo,
+    set_pw_page as set_skolkovo_pw_page,
+    AllModelsExhausted,
+    FREE_MODELS,
+    save_preferred_model,
+)
 
 load_dotenv()
 
 
 class CaptchaDetected(Exception):
     """Raised when Checko returns 429 / blocks the request (captcha required)."""
+
+
+class _StopPipeline(BaseException):
+    """Raised to abort the entire pipeline run (e.g. user declined to continue without Skolkovo)."""
+
+
+# Set to True once the user confirms continuing without Skolkovo analysis.
+_skolkovo_disabled: bool = False
+
+
+def _read_tty(prompt_text: str) -> str:
+    """Read one line from the terminal, bypassing stdin (safe even with watcher thread on stdin)."""
+    try:
+        with open("/dev/tty", "r") as tty:
+            sys.stdout.write(prompt_text)
+            sys.stdout.flush()
+            return tty.readline().strip().lower()
+    except (OSError, IOError):
+        return input(prompt_text).strip().lower()
+
+
+_YES = {"да", "д", "yes", "y"}
+
+
+def _prompt_all_models_failed() -> None:
+    """Show interactive confirmation when all OpenRouter models are unavailable.
+    Sets _skolkovo_disabled=True if user confirms, or raises _StopPipeline."""
+    global _skolkovo_disabled
+    border = "═" * 54
+    print(f"""
+{border}
+⚠️  ВНИМАНИЕ: модуль анализа деятельности недоступен
+{border}
+Все модели OpenRouter вернули ошибку. Парсер не может
+анализировать, подходит компания или нет.
+
+Можно продолжить в режиме БЕЗ анализа:
+  ✓ назначить ответственного
+  ✓ проверить финансы и квалифицировать по налогам
+  ✓ добавить контакты ЛПР
+  ✗ комментарий о деятельности — не будет
+""")
+    if _read_tty("Продолжить без анализа деятельности? (да/нет): ") not in _YES:
+        raise _StopPipeline("Прогон отменён. Замените модель в конфиге и запустите снова.")
+    if _read_tty("Вы уверены? Лиды останутся без оценки по типу бизнеса. (да/нет): ") not in _YES:
+        raise _StopPipeline("Прогон отменён. Замените модель в конфиге и запустите снова.")
+    _skolkovo_disabled = True
+    log.warning("Сколково-модуль отключён по решению пользователя — продолжаем без анализа")
 
 
 # Shared pause flag: set = running, clear = paused (captcha).
@@ -338,22 +392,31 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
     stats["qualified"] += 1
 
     # ── f.2. Проверка Сколково/IT-льготы ─────────────────────────────────
-    # Если сайт не указан, но есть корпоративная почта — берём домен из неё
-    skolkovo_website = deal_website or None
-    if not skolkovo_website and deal_email:
-        for _em in [e.strip() for e in deal_email.replace(";", ",").split(",") if e.strip() and "@" in e]:
-            if is_corporate_email(_em):
-                skolkovo_website = "https://" + _em.split("@")[1].strip()
-                log.info("  Сколково: сайт не указан — используем домен из почты %s → %s", _em, skolkovo_website)
-                break
+    if _skolkovo_disabled:
+        _pause(0.3, 0.7)
+        add_comment(page, lead_id, "⚠️ Анализ деятельности недоступен — проверить вручную")
+    else:
+        # Если сайт не указан, но есть корпоративная почта — берём домен из неё
+        skolkovo_website = deal_website or None
+        if not skolkovo_website and deal_email:
+            for _em in [e.strip() for e in deal_email.replace(";", ",").split(",") if e.strip() and "@" in e]:
+                if is_corporate_email(_em):
+                    skolkovo_website = "https://" + _em.split("@")[1].strip()
+                    log.info("  Сколково: сайт не указан — используем домен из почты %s → %s", _em, skolkovo_website)
+                    break
 
-    skolkovo_eligible, skolkovo_reason = check_skolkovo(
-        name, company, website=skolkovo_website, email=deal_email or None, inn=inn or None
-    )
-    skolkovo_emoji = "✅" if skolkovo_eligible else "❌"
-    log.info("  %s Сколково: %s", skolkovo_emoji, skolkovo_reason)
-    _pause(0.3, 0.7)
-    add_comment(page, lead_id, f"{skolkovo_emoji} {skolkovo_reason}")
+        try:
+            skolkovo_eligible, skolkovo_reason = check_skolkovo(
+                name, company, website=skolkovo_website, email=deal_email or None, inn=inn or None
+            )
+            skolkovo_emoji = "✅" if skolkovo_eligible else "❌"
+            log.info("  %s Сколково: %s", skolkovo_emoji, skolkovo_reason)
+            _pause(0.3, 0.7)
+            add_comment(page, lead_id, f"{skolkovo_emoji} {skolkovo_reason}")
+        except AllModelsExhausted:
+            _prompt_all_models_failed()   # sets _skolkovo_disabled or raises _StopPipeline
+            _pause(0.3, 0.7)
+            add_comment(page, lead_id, "⚠️ Анализ деятельности недоступен — проверить вручную")
 
     # ── f.5. Проверка на дубли по ИНН ────────────────────────────────────
     if check_duplicate_by_inn(inn, lead_id):
@@ -422,6 +485,22 @@ def print_stats(stats: dict) -> None:
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _set_model_interactive() -> None:
+    """CLI wizard to pick and save a preferred OpenRouter model."""
+    print("\nДоступные модели для анализа Сколково:")
+    for i, m in enumerate(FREE_MODELS, 1):
+        tag = "" if m.endswith(":free") else "  (платная)"
+        print(f"  {i}. {m}{tag}")
+    while True:
+        choice = input("\nВыберите номер модели: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(FREE_MODELS):
+            selected = FREE_MODELS[int(choice) - 1]
+            save_preferred_model(selected)
+            print(f"✓ Модель сохранена: {selected}")
+            return
+        print("Неверный номер, попробуйте ещё раз.")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Brizo lead qualification pipeline"
@@ -433,11 +512,21 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="Process only the first N leads (useful for testing)",
     )
+    parser.add_argument(
+        "--set-model",
+        action="store_true",
+        help="Выбрать модель OpenRouter для анализа Сколково и сохранить в конфиг",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    if args.set_model:
+        _set_model_interactive()
+        return
+
     limit = args.limit
 
     log.info("═" * 64)
@@ -608,6 +697,10 @@ def main() -> None:
                     log.info("  Возобновили работу — ждём 30 сек перед повтором лида")
                     time.sleep(30)
                     # Не увеличиваем i — повторяем тот же лид
+                except _StopPipeline as exc:
+                    log.warning("Прогон остановлен: %s", exc)
+                    print(f"\n{exc}")
+                    return
                 except PlaywrightTimeout as exc:
                     log.warning(
                         "Playwright timeout для лида %s (retry исчерпан): %s",

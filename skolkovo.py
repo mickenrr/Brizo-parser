@@ -10,8 +10,42 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
 
-OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "openai/gpt-4o-mini"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# Models tried in order; switches to next on 404/429/503.
+FREE_MODELS = [
+    "google/gemini-2.0-flash-exp:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "mistralai/mistral-7b-instruct:free",
+    "openai/gpt-4o-mini",   # платная, последний резерв
+]
+
+_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skolkovo_model.txt")
+
+
+class AllModelsExhausted(Exception):
+    """Raised when every model in FREE_MODELS returns 404/429/503."""
+
+
+def get_models_order() -> list[str]:
+    """Return FREE_MODELS with the saved preferred model moved to the front."""
+    preferred = None
+    try:
+        if os.path.exists(_CONFIG_FILE):
+            preferred = open(_CONFIG_FILE, encoding="utf-8").read().strip()
+    except Exception:
+        pass
+    if preferred and preferred in FREE_MODELS:
+        return [preferred] + [m for m in FREE_MODELS if m != preferred]
+    return list(FREE_MODELS)
+
+
+def save_preferred_model(model: str) -> None:
+    try:
+        with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
+            f.write(model)
+    except Exception as exc:
+        log.warning("Не удалось сохранить выбор модели: %s", exc)
 
 # Playwright page injected from main.py (avoids nesting two sync_playwright contexts).
 # If not injected, _fetch_site_text falls back to requests.get.
@@ -196,47 +230,65 @@ def check_skolkovo(
         datanewton_text=datanewton_text or "нет данных",
     )
 
-    try:
-        resp = requests.post(
-            OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/mickenrr/Brizo-parser",
-                "X-Title": "BrizoParser",
-            },
-            json={
-                "model": OPENROUTER_MODEL,
-                "messages": [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": 500,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
+    models = get_models_order()
+    last_exc: Exception | None = None
 
-        msg     = resp.json()["choices"][0]["message"]
-        content = msg.get("content")
-        reasoning = msg.get("reasoning") or ""
-        log.info("  Сколково RAW content: %s", str(content)[:300])
-        if not content:
-            log.info("  Сколково RAW reasoning (последние 300): %s", reasoning[-300:])
+    for idx, model in enumerate(models):
+        try:
+            resp = requests.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/mickenrr/Brizo-parser",
+                    "X-Title": "BrizoParser",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": 500,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
 
-        # Читаем content, при null — ищем JSON в reasoning (reasoning-модели)
-        result = _parse_json_response(content) or _parse_json_response(reasoning)
-        eligible = bool(result.get("eligible", False))
-        reason   = str(result.get("reason", "Ошибка разбора ответа"))
-        log.info("  Сколково: eligible=%s  reason=%s", eligible, reason)
-        return (eligible, reason)
+            msg       = resp.json()["choices"][0]["message"]
+            content   = msg.get("content")
+            reasoning = msg.get("reasoning") or ""
+            log.info("  Сколково RAW content [%s]: %s", model, str(content)[:300])
+            if not content:
+                log.info("  Сколково RAW reasoning (последние 300): %s", reasoning[-300:])
 
-    except requests.HTTPError as exc:
-        log.warning("  Сколково: HTTP ошибка %s", exc)
-        return (False, f"HTTP ошибка: {exc}")
-    except (json.JSONDecodeError, KeyError) as exc:
-        log.warning("  Сколково: не удалось разобрать ответ — %s", exc)
-        return (False, "Ошибка разбора ответа модели")
-    except Exception as exc:
-        log.warning("  Сколково: непредвиденная ошибка — %s", exc)
-        return (False, f"Ошибка: {exc}")
+            result   = _parse_json_response(content) or _parse_json_response(reasoning)
+            eligible = bool(result.get("eligible", False))
+            reason   = str(result.get("reason", "Ошибка разбора ответа"))
+            log.info("  Сколково [%s]: eligible=%s  reason=%s", model, eligible, reason)
+            return (eligible, reason)
+
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            if status in (404, 429, 503):
+                last_exc = exc
+                next_model = models[idx + 1] if idx + 1 < len(models) else None
+                if next_model:
+                    log.warning("⚠️ Модель %s недоступна (HTTP %s), переключаемся на %s",
+                                model, status, next_model)
+                else:
+                    log.warning("⚠️ Модель %s недоступна (HTTP %s), резервных моделей нет",
+                                model, status)
+                continue
+            log.warning("  Сколково: HTTP ошибка %s", exc)
+            return (False, f"HTTP ошибка: {exc}")
+        except (json.JSONDecodeError, KeyError) as exc:
+            log.warning("  Сколково: не удалось разобрать ответ — %s", exc)
+            return (False, "Ошибка разбора ответа модели")
+        except Exception as exc:
+            log.warning("  Сколково: непредвиденная ошибка — %s", exc)
+            return (False, f"Ошибка: {exc}")
+
+    raise AllModelsExhausted(
+        f"Все {len(models)} моделей OpenRouter вернули ошибку. Последняя: {last_exc}"
+    )
