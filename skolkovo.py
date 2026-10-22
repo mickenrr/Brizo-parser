@@ -208,10 +208,11 @@ _USER_PROMPT_TEMPLATE = """Компания: {name}
 """
 
 
-def _fetch_datanewton(inn: str) -> str:
-    """Запросить datanewton.ru и вернуть сводку по упоминаниям патентов и грантов."""
+def _fetch_datanewton(inn: str) -> tuple[str, bool]:
+    """Запросить datanewton.ru. Возвращает (сводка, has_assets).
+    has_assets=True если найдены патенты или гранты."""
     if not inn:
-        return ""
+        return ("", False)
     try:
         r = requests.get(
             f"https://datanewton.ru/company/{inn}",
@@ -240,18 +241,19 @@ def _fetch_datanewton(inn: str) -> str:
         else:
             grant_part = "Гранты: не найдено."
 
-        return f"{patent_part} {grant_part}"
+        has_assets = patent_count > 0 or bool(grant_matches)
+        return (f"{patent_part} {grant_part}", has_assets)
     except Exception as exc:
         log.debug("  Сколково: не удалось загрузить datanewton.ru/%s — %s", inn, exc)
-        return ""
+        return ("", False)
 
 
-def _fetch_site_text(url: str) -> str:
-    """Загрузить сайт через Playwright (JS-сайты, Cloudflare) и вернуть первые 600 слов.
+def _fetch_site_text(url: str) -> tuple[str, bool]:
+    """Загрузить сайт через Playwright (JS-сайты, Cloudflare) и вернуть (текст, site_loaded).
     Если Playwright-страница не инжектирована — fallback на requests.get.
-    При любой ошибке — пустая строка."""
+    При любой ошибке — ("", False)."""
     if not url:
-        return ""
+        return ("", False)
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     pw_page = _get_pw_page()
@@ -263,7 +265,7 @@ def _fetch_site_text(url: str) -> str:
             words = text.split()
             result = " ".join(words[:600])
             log.info("  Сколково: загружено %d слов с сайта %s", len(words[:600]), url)
-            return result
+            return (result, True)
         except Exception as exc:
             log.info("  Сколково: сайт недоступен через Playwright (%s): %s", url, type(exc).__name__)
     try:
@@ -274,10 +276,27 @@ def _fetch_site_text(url: str) -> str:
         words = text.split()
         result = " ".join(words[:600])
         log.info("  Сколково: загружено %d слов с сайта %s", len(words[:600]), url)
-        return result
+        return (result, True)
     except Exception as exc:
         log.info("  Сколково: сайт недоступен совсем (%s)", url)
-        return ""
+        return ("", False)
+
+
+def _check_requisites(site_text: str, inn: str | None, company_name: str) -> str | None:
+    """Проверить, упоминается ли ИНН или название компании на сайте."""
+    if not site_text or (not inn and not company_name):
+        return None
+    text_lower = site_text.lower()
+    inn_found = inn and inn.strip() in site_text
+    name_words = [w.lower() for w in company_name.split() if len(w) >= 4][:3]
+    name_found = any(w in text_lower for w in name_words) if name_words else True
+    if not inn_found and not name_found:
+        return (
+            "⚠️ Реквизиты на сайте не совпадают с карточкой сделки: "
+            f"ИНН {inn or '—'} и название «{company_name}» не обнаружены на сайте. "
+            "Возможно, сайт принадлежит другой компании."
+        )
+    return None
 
 
 def _extract_email_domain(email: str | None) -> str:
@@ -320,16 +339,26 @@ def check_skolkovo(
     website: str | None = None,
     email: str | None = None,
     inn: str | None = None,
-) -> tuple[bool, str]:
+) -> tuple[bool | None, str]:
     """Проверить компанию на признаки Сколково через мультипровайдерный LLM-модуль.
 
-    Returns (eligible, reason). Raises AllModelsExhausted если все провайдеры упали.
+    Returns (eligible, reason):
+      True  — подходит под Сколково
+      False — не подходит
+      None  — недостаточно данных (сайт недоступен, но есть активы по datanewton)
+    Raises AllModelsExhausted если все провайдеры упали.
     """
-    site_text = _fetch_site_text(website or "")
+    site_text, site_loaded = _fetch_site_text(website or "")
 
-    datanewton_text = _fetch_datanewton(inn or "")
+    datanewton_text, has_assets = _fetch_datanewton(inn or "")
     if datanewton_text:
         log.info("  Сколково datanewton: %s", datanewton_text)
+
+    # Сайт недоступен, но datanewton нашёл активы → вердикт ❓
+    if not site_loaded and has_assets:
+        reason = f"не удалось проанализировать сайт компании, но найдены интеллектуальные активы: {datanewton_text}"
+        log.info("  ❓ Сколково: %s", reason)
+        return (None, reason)
 
     prompt = _USER_PROMPT_TEMPLATE.format(
         name=company_name,
@@ -348,6 +377,13 @@ def check_skolkovo(
         result   = _parse_json_response(raw)
         eligible = bool(result.get("eligible", False))
         reason   = str(result.get("reason", "Ошибка разбора ответа"))
+
+        # Если сайт загружен — проверяем совпадение реквизитов
+        if site_loaded:
+            warning = _check_requisites(site_text, inn, company_name)
+            if warning:
+                reason = reason + " " + warning
+
         log.info("  Сколково: eligible=%s  reason=%s", eligible, reason)
         return (eligible, reason)
     except (json.JSONDecodeError, KeyError) as exc:

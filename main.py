@@ -410,10 +410,23 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
             skolkovo_eligible, skolkovo_reason = check_skolkovo(
                 name, company, website=skolkovo_website, email=deal_email or None, inn=inn or None
             )
-            skolkovo_emoji = "✅" if skolkovo_eligible else "❌"
+            if skolkovo_eligible is True:
+                skolkovo_emoji = "✅"
+            elif skolkovo_eligible is False:
+                skolkovo_emoji = "❌"
+            else:
+                skolkovo_emoji = "❓"
             log.info("  %s Сколково: %s", skolkovo_emoji, skolkovo_reason)
             _pause(0.3, 0.7)
             add_comment(page, lead_id, f"{skolkovo_emoji} {skolkovo_reason}")
+
+            if skolkovo_eligible is True:
+                move_to_stage(page, lead_id, STAGE_PARSING)
+            elif skolkovo_eligible is False:
+                reject_lead(page, lead_id, "нецелевой продукт")
+                stats["rejected"]["нецелевой продукт"] += 1
+                return ("rejected", "нецелевой продукт")
+            # None → лид остаётся в База
         except AllModelsExhausted:
             _prompt_all_models_failed()   # sets _skolkovo_disabled or raises _StopPipeline
             _pause(0.3, 0.7)
@@ -430,9 +443,6 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
     log.info("  Адрес: %s → %s", legal_address[:80] if legal_address else "не найден", tz_comment)
     _pause(0.3, 0.7)
     add_comment(page, lead_id, tz_comment)
-
-    # ── h. Перемещаем в «Парсю» ── ОТКЛЮЧЕНО: сделка остаётся в «База» ───
-    # move_to_stage(page, lead_id, STAGE_PARSING)
 
     # ── i. Добавляем ЛПРов из Чекко в контакты сделки ───────────────────
     lpr_contacts = get_lpr_contacts(company)
