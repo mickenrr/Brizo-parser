@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 log = logging.getLogger(__name__)
 
 OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "minimax/minimax-m3.1-flash:free"
+OPENROUTER_MODEL = "openai/gpt-4o-mini"
 
 # Playwright page injected from main.py (avoids nesting two sync_playwright contexts).
 # If not injected, _fetch_site_text falls back to requests.get.
@@ -202,6 +202,8 @@ def check_skolkovo(
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/mickenrr/Brizo-parser",
+                "X-Title": "BrizoParser",
             },
             json={
                 "model": OPENROUTER_MODEL,
@@ -209,7 +211,7 @@ def check_skolkovo(
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
-                "max_tokens": 3000,
+                "max_tokens": 500,
             },
             timeout=30,
         )
