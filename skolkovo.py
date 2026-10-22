@@ -10,42 +10,155 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-# Models tried in order; switches to next on 404/429/503.
-FREE_MODELS = [
-    "google/gemini-2.0-flash-exp:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "mistralai/mistral-7b-instruct:free",
-    "openai/gpt-4o-mini",   # платная, последний резерв
-]
+# ─── Provider infrastructure ──────────────────────────────────────────────────
 
 _CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skolkovo_model.txt")
 
+_OR_URL   = "https://openrouter.ai/api/v1/chat/completions"
+_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+_GEM_URL  = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
+
+class ProviderUnavailable(Exception):
+    """Signal from a provider call: skip to the next one."""
+
 
 class AllModelsExhausted(Exception):
-    """Raised when every model in FREE_MODELS returns 404/429/503."""
+    """Raised when every provider is unavailable."""
 
 
-def get_models_order() -> list[str]:
-    """Return FREE_MODELS with the saved preferred model moved to the front."""
-    preferred = None
+def _openai_compat(url: str, api_key: str, model: str,
+                   system: str, user: str,
+                   extra_headers: dict | None = None) -> str:
+    """Generic OpenAI-compatible chat-completions call. Returns response text."""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    resp = requests.post(
+        url,
+        headers=headers,
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
+            "max_tokens": 500,
+        },
+        timeout=30,
+    )
+    if resp.status_code in (404, 429, 503):
+        raise ProviderUnavailable(f"HTTP {resp.status_code}")
+    resp.raise_for_status()
+    msg = resp.json()["choices"][0]["message"]
+    # reasoning-модели кладут ответ в поле reasoning вместо content
+    return msg.get("content") or msg.get("reasoning") or ""
+
+
+def _call_openrouter(model: str, system: str, user: str) -> str:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise ProviderUnavailable("OPENROUTER_API_KEY не задан")
+    return _openai_compat(
+        _OR_URL, api_key, model, system, user,
+        extra_headers={
+            "HTTP-Referer": "https://github.com/mickenrr/Brizo-parser",
+            "X-Title": "BrizoParser",
+        },
+    )
+
+
+def _call_groq(system: str, user: str) -> str:
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise ProviderUnavailable("GROQ_API_KEY не задан")
+    return _openai_compat(_GROQ_URL, api_key, "llama-3.1-8b-instant", system, user)
+
+
+def _call_gemini(system: str, user: str) -> str:
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise ProviderUnavailable("GEMINI_API_KEY не задан")
+    resp = requests.post(
+        f"{_GEM_URL}?key={api_key}",
+        headers={"Content-Type": "application/json"},
+        json={
+            "system_instruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+        },
+        timeout=30,
+    )
+    if resp.status_code in (404, 429, 503):
+        raise ProviderUnavailable(f"HTTP {resp.status_code}")
+    resp.raise_for_status()
+    return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+# Each entry: (display_name, api_key_env_var, call_fn(system, user) -> str)
+PROVIDERS: list[tuple[str, str, object]] = [
+    ("OpenRouter / gemini-2.0-flash-exp:free",   "OPENROUTER_API_KEY",
+     lambda s, u: _call_openrouter("google/gemini-2.0-flash-exp:free", s, u)),
+    ("OpenRouter / llama-3.3-70b-instruct:free", "OPENROUTER_API_KEY",
+     lambda s, u: _call_openrouter("meta-llama/llama-3.3-70b-instruct:free", s, u)),
+    ("Groq / llama-3.1-8b-instant",              "GROQ_API_KEY",
+     lambda s, u: _call_groq(s, u)),
+    ("Google Gemini / gemini-1.5-flash",         "GEMINI_API_KEY",
+     lambda s, u: _call_gemini(s, u)),
+    ("OpenRouter / gpt-4o-mini [платный]",       "OPENROUTER_API_KEY",
+     lambda s, u: _call_openrouter("openai/gpt-4o-mini", s, u)),
+]
+
+# Keep for backward compatibility with main.py
+FREE_MODELS = [name for name, _, __ in PROVIDERS]
+
+
+def get_current_preferred() -> str | None:
     try:
         if os.path.exists(_CONFIG_FILE):
-            preferred = open(_CONFIG_FILE, encoding="utf-8").read().strip()
+            return open(_CONFIG_FILE, encoding="utf-8").read().strip() or None
     except Exception:
         pass
-    if preferred and preferred in FREE_MODELS:
-        return [preferred] + [m for m in FREE_MODELS if m != preferred]
-    return list(FREE_MODELS)
+    return None
 
 
-def save_preferred_model(model: str) -> None:
+def save_preferred_provider(name: str) -> None:
     try:
         with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
-            f.write(model)
+            f.write(name)
     except Exception as exc:
-        log.warning("Не удалось сохранить выбор модели: %s", exc)
+        log.warning("Не удалось сохранить выбор провайдера: %s", exc)
+
+
+# kept for old callers
+save_preferred_model = save_preferred_provider
+
+
+def get_providers_order() -> list[tuple[str, str, object]]:
+    """Return PROVIDERS with the saved preferred provider moved to the front."""
+    preferred = get_current_preferred()
+    if preferred:
+        found = next((p for p in PROVIDERS if p[0] == preferred), None)
+        if found:
+            return [found] + [p for p in PROVIDERS if p[0] != preferred]
+    return list(PROVIDERS)
+
+
+def call_ai(system: str, user: str) -> str:
+    """Try providers in order. Returns raw response text or raises AllModelsExhausted."""
+    providers = get_providers_order()
+    for idx, (name, _key_env, fn) in enumerate(providers):
+        try:
+            text = fn(system, user)
+            log.info("  Сколково: провайдер [%s] — OK", name)
+            return text
+        except ProviderUnavailable as exc:
+            next_name = providers[idx + 1][0] if idx + 1 < len(providers) else None
+            if next_name:
+                log.warning("⚠️ Провайдер %s недоступен (%s), переключаемся на %s",
+                            name, exc, next_name)
+            else:
+                log.warning("⚠️ Провайдер %s недоступен (%s), резервных нет", name, exc)
+    raise AllModelsExhausted("Все провайдеры недоступны")
 
 # Playwright page injected from main.py (avoids nesting two sync_playwright contexts).
 # If not injected, _fetch_site_text falls back to requests.get.
@@ -208,15 +321,10 @@ def check_skolkovo(
     email: str | None = None,
     inn: str | None = None,
 ) -> tuple[bool, str]:
-    """Проверить компанию на признаки Сколково/IT-льгот через OpenRouter LLM.
+    """Проверить компанию на признаки Сколково через мультипровайдерный LLM-модуль.
 
-    Returns (eligible, reason).
+    Returns (eligible, reason). Raises AllModelsExhausted если все провайдеры упали.
     """
-    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
-        log.debug("OPENROUTER_API_KEY не задан — пропускаем Сколково-проверку")
-        return (False, "OPENROUTER_API_KEY не задан")
-
     site_text = _fetch_site_text(website or "")
 
     datanewton_text = _fetch_datanewton(inn or "")
@@ -230,65 +338,21 @@ def check_skolkovo(
         datanewton_text=datanewton_text or "нет данных",
     )
 
-    models = get_models_order()
-    last_exc: Exception | None = None
+    try:
+        raw = call_ai(_SYSTEM_PROMPT, prompt)
+    except AllModelsExhausted:
+        raise
 
-    for idx, model in enumerate(models):
-        try:
-            resp = requests.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://github.com/mickenrr/Brizo-parser",
-                    "X-Title": "BrizoParser",
-                },
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": _SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": 500,
-                },
-                timeout=30,
-            )
-            resp.raise_for_status()
-
-            msg       = resp.json()["choices"][0]["message"]
-            content   = msg.get("content")
-            reasoning = msg.get("reasoning") or ""
-            log.info("  Сколково RAW content [%s]: %s", model, str(content)[:300])
-            if not content:
-                log.info("  Сколково RAW reasoning (последние 300): %s", reasoning[-300:])
-
-            result   = _parse_json_response(content) or _parse_json_response(reasoning)
-            eligible = bool(result.get("eligible", False))
-            reason   = str(result.get("reason", "Ошибка разбора ответа"))
-            log.info("  Сколково [%s]: eligible=%s  reason=%s", model, eligible, reason)
-            return (eligible, reason)
-
-        except requests.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else 0
-            if status in (404, 429, 503):
-                last_exc = exc
-                next_model = models[idx + 1] if idx + 1 < len(models) else None
-                if next_model:
-                    log.warning("⚠️ Модель %s недоступна (HTTP %s), переключаемся на %s",
-                                model, status, next_model)
-                else:
-                    log.warning("⚠️ Модель %s недоступна (HTTP %s), резервных моделей нет",
-                                model, status)
-                continue
-            log.warning("  Сколково: HTTP ошибка %s", exc)
-            return (False, f"HTTP ошибка: {exc}")
-        except (json.JSONDecodeError, KeyError) as exc:
-            log.warning("  Сколково: не удалось разобрать ответ — %s", exc)
-            return (False, "Ошибка разбора ответа модели")
-        except Exception as exc:
-            log.warning("  Сколково: непредвиденная ошибка — %s", exc)
-            return (False, f"Ошибка: {exc}")
-
-    raise AllModelsExhausted(
-        f"Все {len(models)} моделей OpenRouter вернули ошибку. Последняя: {last_exc}"
-    )
+    log.info("  Сколково RAW: %s", raw[:300])
+    try:
+        result   = _parse_json_response(raw)
+        eligible = bool(result.get("eligible", False))
+        reason   = str(result.get("reason", "Ошибка разбора ответа"))
+        log.info("  Сколково: eligible=%s  reason=%s", eligible, reason)
+        return (eligible, reason)
+    except (json.JSONDecodeError, KeyError) as exc:
+        log.warning("  Сколково: не удалось разобрать ответ — %s", exc)
+        return (False, "Ошибка разбора ответа модели")
+    except Exception as exc:
+        log.warning("  Сколково: непредвиденная ошибка — %s", exc)
+        return (False, f"Ошибка: {exc}")

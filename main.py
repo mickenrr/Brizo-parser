@@ -42,8 +42,9 @@ from skolkovo import (
     check_skolkovo,
     set_pw_page as set_skolkovo_pw_page,
     AllModelsExhausted,
-    FREE_MODELS,
-    save_preferred_model,
+    PROVIDERS,
+    save_preferred_provider,
+    get_current_preferred,
 )
 
 load_dotenv()
@@ -486,17 +487,22 @@ def print_stats(stats: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _set_model_interactive() -> None:
-    """CLI wizard to pick and save a preferred OpenRouter model."""
-    print("\nДоступные модели для анализа Сколково:")
-    for i, m in enumerate(FREE_MODELS, 1):
-        tag = "" if m.endswith(":free") else "  (платная)"
-        print(f"  {i}. {m}{tag}")
+    """CLI wizard to pick and save a preferred AI provider."""
+    current = get_current_preferred()
+    print("\nДоступные провайдеры для анализа Сколково:\n")
+    for i, (name, key_env, _) in enumerate(PROVIDERS, 1):
+        key_present = bool(os.environ.get(key_env, "").strip())
+        status = "✓ ключ есть" if key_present else f"✗ {key_env} не задан"
+        marker = " ◄ текущий" if name == current else ""
+        print(f"  {i}. {name:<48} [{status}]{marker}")
+    if not current:
+        print("\n  (стартовый провайдер не задан — используется первый из списка)")
     while True:
-        choice = input("\nВыберите номер модели: ").strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(FREE_MODELS):
-            selected = FREE_MODELS[int(choice) - 1]
-            save_preferred_model(selected)
-            print(f"✓ Модель сохранена: {selected}")
+        choice = input("\nВыберите номер провайдера для старта: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(PROVIDERS):
+            selected_name = PROVIDERS[int(choice) - 1][0]
+            save_preferred_provider(selected_name)
+            print(f"✓ Провайдер сохранён: {selected_name}")
             return
         print("Неверный номер, попробуйте ещё раз.")
 
