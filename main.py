@@ -422,10 +422,11 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
 
             if skolkovo_eligible is True:
                 move_to_stage(page, lead_id, STAGE_PARSING)
+                stats["moved_to_parsing"] += 1
             elif skolkovo_eligible is False:
-                reject_lead(page, lead_id, "нецелевой продукт")
-                stats["rejected"]["нецелевой продукт"] += 1
-                return ("rejected", "нецелевой продукт")
+                reject_lead(page, lead_id, "Нецелевой продукт")
+                stats["rejected"]["Нецелевой продукт"] += 1
+                return ("rejected", "Нецелевой продукт")
             # None → лид остаётся в База
         except AllModelsExhausted:
             _prompt_all_models_failed()   # sets _skolkovo_disabled or raises _StopPipeline
@@ -460,10 +461,11 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def print_stats(stats: dict) -> None:
-    total     = stats["total"]
-    qualified = stats.get("qualified", 0)
-    errors    = stats["errors"]
-    rejected  = stats["rejected"]
+    total            = stats["total"]
+    qualified        = stats.get("qualified", 0)
+    moved_to_parsing = stats.get("moved_to_parsing", 0)
+    errors           = stats["errors"]
+    rejected         = stats["rejected"]
 
     no_kd       = rejected.get(REASON_NO_WEBSITE, 0)
     high_rev    = rejected.get(REASON_TOO_BIG, 0)
@@ -477,7 +479,8 @@ def print_stats(stats: dict) -> None:
         "  СТАТИСТИКА",
         "═" * 55,
         f"  Обработано всего              : {total}",
-        f"  → обработано (остались в База) : {qualified}",
+        f"  → прошли квалификацию          : {qualified}",
+        f"  ✅ перенесено в Парсю          : {moved_to_parsing}",
         f"  ❌ Нет КД → Проиграно          : {no_kd}",
         f"  ❌ Интересные, но ярд → Проигр.: {high_rev}",
         f"  ❌ Мало налогов → Проиграно    : {low_tax}",
@@ -552,6 +555,7 @@ def main() -> None:
     stats: dict = {
         "total": 0,
         "qualified": 0,
+        "moved_to_parsing": 0,
         "errors": 0,
         "rejected": defaultdict(int),
     }
@@ -738,6 +742,7 @@ def main() -> None:
                     if not captcha_hit:
                         _emit("lead_done", num=lead_num, status=status, name=lead_name, reason=reason,
                               qualified=stats["qualified"],
+                              moved_to_parsing=stats["moved_to_parsing"],
                               rejected=sum(stats["rejected"].values()),
                               errors=stats["errors"])
                     _pause(1.5, 2.5)
