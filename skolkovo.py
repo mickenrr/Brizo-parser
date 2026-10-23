@@ -152,12 +152,20 @@ def call_ai(system: str, user: str) -> str:
             log.info("  Сколково: провайдер [%s] — OK", name)
             return text
         except ProviderUnavailable as exc:
-            next_name = providers[idx + 1][0] if idx + 1 < len(providers) else None
-            if next_name:
-                log.warning("⚠️ Провайдер %s недоступен (%s), переключаемся на %s",
-                            name, exc, next_name)
-            else:
-                log.warning("⚠️ Провайдер %s недоступен (%s), резервных нет", name, exc)
+            reason = str(exc)
+        except (requests.exceptions.ReadTimeout,
+                requests.exceptions.ConnectTimeout,
+                requests.exceptions.SSLError,
+                requests.exceptions.ConnectionError) as exc:
+            reason = type(exc).__name__
+        else:
+            continue
+        next_name = providers[idx + 1][0] if idx + 1 < len(providers) else None
+        if next_name:
+            log.warning("⚠️ Провайдер %s недоступен (%s), переключаемся на %s",
+                        name, reason, next_name)
+        else:
+            log.warning("⚠️ Провайдер %s недоступен (%s), резервных нет", name, reason)
     raise AllModelsExhausted("Все провайдеры недоступны")
 
 # Playwright page injected from main.py (avoids nesting two sync_playwright contexts).
