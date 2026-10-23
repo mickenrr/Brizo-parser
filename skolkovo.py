@@ -319,6 +319,26 @@ def _has_production_signals(site_text: str, datanewton_text: str) -> bool:
     return any(kw in combined for kw in _PRODUCTION_KEYWORDS)
 
 
+# Ключевые слова в названии компании, однозначно указывающие на нецелевой бизнес.
+# Используются ТОЛЬКО когда сайт недоступен и datanewton пустой — чтобы не отправлять
+# в ❓ компании, которые явно не подходят по названию.
+_NONTARGET_NAME_KEYWORDS = [
+    "флот", "морской", "авиа",
+    "торг", "торговл", "логистик", "транспорт",
+    "сервис", "клинин",
+    "санатор", "гостин", "отель", "ресторан", "кафе", "магазин",
+    "риелтор", "недвижим", "страхов",
+    "банк", "лизинг", "факторинг",
+    "медиа", "реклам", "маркетинг", "консалт", "аудит", "юридич",
+]
+
+
+def _is_nontarget_by_name(company_name: str) -> bool:
+    """Вернуть True если название компании содержит признаки нецелевого бизнеса."""
+    name_lower = company_name.lower()
+    return any(kw in name_lower for kw in _NONTARGET_NAME_KEYWORDS)
+
+
 def _extract_email_domain(email: str | None) -> str:
     """Извлечь домен из первого email-адреса."""
     if not email:
@@ -385,8 +405,13 @@ def check_skolkovo(
         log.info("  ❓ Сколково: %s", reason)
         return (None, reason)
 
-    # Сайт был указан, не открылся (или пустой), datanewton тоже пустой → ❓ без AI
+    # Сайт был указан, не открылся (или пустой), datanewton тоже пустой
     if website_provided and not site_ok and not datanewton_text:
+        # Если название явно нецелевое — сразу ❌, не отправляем в ручную проверку
+        if _is_nontarget_by_name(company_name):
+            reason = "Нецелевой продукт (определено по названию, сайт недоступен)"
+            log.info("  ❌ Сколково: %s", reason)
+            return (False, reason)
         reason = "⚠️ Сайт компании недоступен — невозможно провести проверку. Требуется ручная проверка."
         log.info("  ❓ Сколково: %s", reason)
         return (None, reason)
