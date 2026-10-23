@@ -184,7 +184,10 @@ _SYSTEM_PROMPT = """Ты — эксперт по инновационным ко
 
 НЕ подходят: торговля, логистика, строительство, сервис без собственных разработок, контрактное производство по чужим чертежам.
 
-Отвечай ТОЛЬКО валидным JSON: {{"eligible": true/false, "reason": "..."}}"""
+ВАЖНО — правило для eligible: null:
+Если компания производит физическое оборудование или технику собственной разработки, но ты не можешь подтвердить наличие патентов или грантов — верни eligible: null (не false). False возвращай ТОЛЬКО если это явно торговля, дистрибьюция или услуги без какого-либо собственного продукта.
+
+Отвечай ТОЛЬКО валидным JSON: {{"eligible": true/false/null, "reason": "..."}}"""
 
 _USER_PROMPT_TEMPLATE = """Компания: {name}
 Сайт: {website}
@@ -299,6 +302,23 @@ def _check_requisites(site_text: str, inn: str | None, company_name: str) -> str
     return None
 
 
+# Ключевые слова, свидетельствующие о собственном производстве/разработках.
+# Если модель вернула False, но эти слова встречаются в тексте сайта или datanewton
+# — переопределяем вердикт на None (❓), чтобы лид попал на ручную проверку.
+_PRODUCTION_KEYWORDS = [
+    "производим", "разрабатываем", "собственное производство",
+    "серийное оборудование", "конструкторская документация", "ниокр",
+    "патент", "свидетельство", "изобретение", "полезная модель",
+    "промышленный образец", "опытно-конструктор", "опытный образец",
+]
+
+
+def _has_production_signals(site_text: str, datanewton_text: str) -> bool:
+    """Вернуть True если в текстах есть признаки собственного производства/разработок."""
+    combined = (site_text + " " + datanewton_text).lower()
+    return any(kw in combined for kw in _PRODUCTION_KEYWORDS)
+
+
 def _extract_email_domain(email: str | None) -> str:
     """Извлечь домен из первого email-адреса."""
     if not email:
@@ -374,9 +394,22 @@ def check_skolkovo(
 
     log.info("  Сколково RAW: %s", raw[:300])
     try:
-        result   = _parse_json_response(raw)
-        eligible = bool(result.get("eligible", False))
-        reason   = str(result.get("reason", "Ошибка разбора ответа"))
+        result      = _parse_json_response(raw)
+        eligible_raw = result.get("eligible")   # может быть True, False или None (null в JSON)
+        reason       = str(result.get("reason", "Ошибка разбора ответа"))
+
+        if eligible_raw is True:
+            eligible: bool | None = True
+        elif eligible_raw is False:
+            # Модель сказала «нет» — но проверяем, нет ли признаков производства
+            if _has_production_signals(site_text, datanewton_text):
+                eligible = None
+                log.info("  Сколково: модель вернула False, но найдены признаки производства → переопределяем на None (❓)")
+            else:
+                eligible = False
+        else:
+            # eligible_raw is None — модель явно вернула null
+            eligible = None
 
         # Если сайт загружен — проверяем совпадение реквизитов
         if site_loaded:
