@@ -60,7 +60,7 @@ POLL_INTERVAL = 2    # seconds between kanban load checks
 POLL_MAX      = 40   # total seconds to wait for kanban
 
 # Module-level state for direct REST API calls
-_api_state: dict = {"bearer": ""}
+_api_state: dict = {"bearer": "", "user_id": 0, "user_name": ""}
 
 # Cache: field_id (int) → lowercase field name.  Populated on first API use.
 _field_map_cache: dict[int, str] = {}
@@ -131,10 +131,14 @@ def _ensure_bearer() -> str:
             timeout=15,
         )
         if r.status_code == 200:
-            token = r.json().get("token", "")
+            data = r.json()
+            token = data.get("token", "")
             if token:
                 _api_state["bearer"] = f"Bearer {token}"
-                log.info("Bearer token obtained via REST auth")
+                _api_state["user_id"] = data.get("id", 0)
+                _api_state["user_name"] = data.get("name", "")
+                log.info("Bearer token obtained via REST auth (user: %s id=%s)",
+                         _api_state["user_name"], _api_state["user_id"])
     except Exception as e:
         log.warning("REST auth failed: %s", e)
     return _api_state.get("bearer", "")
@@ -152,6 +156,15 @@ def _get_api_session() -> _rlib.Session | None:
         "Referer": f"{BRIZO_URL}/cabinet/deals",
     })
     return s
+
+
+def _get_me() -> tuple[int, str]:
+    """Return (user_id, user_name) of the authenticated user.
+    Calls _ensure_bearer() if not yet captured; falls back to hardcoded constants."""
+    _ensure_bearer()
+    uid = _api_state.get("user_id") or MY_USER_ID
+    name = _api_state.get("user_name") or MY_NAME
+    return (uid, name)
 
 
 def _fetch_field_map() -> dict[int, str]:
@@ -817,7 +830,8 @@ def assign_to_me(page: Page, lead_id: str) -> None:
 
     Requires Bearer token from _api_state (captured from live browser requests on login).
     """
-    log.info("Assigning %s as responsible for deal %s", MY_NAME, lead_id)
+    user_id, user_name = _get_me()
+    log.info("Assigning %s (id=%s) as responsible for deal %s", user_name, user_id, lead_id)
 
     sess = _get_api_session()
     if not sess:
@@ -827,7 +841,7 @@ def assign_to_me(page: Page, lead_id: str) -> None:
     # Step 1: add as participant (422 if already a member — that's fine)
     r1 = sess.post(
         f"{BRIZO_URL}/api/deals/{lead_id}/members",
-        json={"ids": [MY_USER_ID]},
+        json={"ids": [user_id]},
         timeout=10,
     )
     log.info("Deal %s: POST /members → %s", lead_id, r1.status_code)
@@ -835,11 +849,11 @@ def assign_to_me(page: Page, lead_id: str) -> None:
     # Step 2: set as responsible
     r2 = sess.patch(
         f"{BRIZO_URL}/api/deals/{lead_id}/responsible",
-        json={"id": MY_USER_ID},
+        json={"id": user_id},
         timeout=10,
     )
     if r2.status_code == 200:
-        log.info("Deal %s: responsible set to %s ✓", lead_id, MY_NAME)
+        log.info("Deal %s: responsible set to %s ✓", lead_id, user_name)
     else:
         log.warning(
             "Deal %s: PATCH /responsible → %s: %s",
