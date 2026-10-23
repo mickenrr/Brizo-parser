@@ -384,8 +384,8 @@ def check_skolkovo(
     website_provided = bool(website and website.strip())
     site_text, site_loaded = _fetch_site_text(website or "")
 
-    # Сайт "тонкий" — загрузился, но текста < 50 слов (заглушка, ошибка, редирект)
-    site_thin = site_loaded and len((site_text or "").split()) < 50
+    # Сайт "тонкий" — загрузился, но текста < 15 слов (пустая заглушка, редирект на 1 строку)
+    site_thin = site_loaded and len((site_text or "").split()) < 15
     site_ok   = site_loaded and not site_thin
 
     datanewton_text, has_assets = _fetch_datanewton(inn or "")
@@ -395,19 +395,14 @@ def check_skolkovo(
     # Сайт не открылся (или пустой), но datanewton нашёл активы → ❓ без AI
     if not site_ok and has_assets:
         reason = f"не удалось проанализировать сайт компании, но найдены интеллектуальные активы: {datanewton_text}"
-        log.info("  ❓ Сколково: %s", reason)
         return (None, reason)
 
     # Сайт был указан, не открылся (или пустой), datanewton тоже пустой
     if website_provided and not site_ok and not datanewton_text:
         # Если название явно нецелевое — сразу ❌, не отправляем в ручную проверку
         if _is_nontarget_by_name(company_name):
-            reason = "Нецелевой продукт (определено по названию, сайт недоступен)"
-            log.info("  ❌ Сколково: %s", reason)
-            return (False, reason)
-        reason = "⚠️ Сайт компании недоступен — невозможно провести проверку. Требуется ручная проверка."
-        log.info("  ❓ Сколково: %s", reason)
-        return (None, reason)
+            return (False, "Нецелевой продукт (определено по названию, сайт недоступен)")
+        return (None, "⚠️ Сайт компании недоступен — невозможно провести проверку. Требуется ручная проверка.")
 
     prompt = _USER_PROMPT_TEMPLATE.format(
         name=company_name,

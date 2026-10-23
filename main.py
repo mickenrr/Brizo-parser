@@ -418,7 +418,8 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
                 skolkovo_emoji = "❓"
             log.info("  %s Сколково: %s", skolkovo_emoji, skolkovo_reason)
             _pause(0.3, 0.7)
-            comment_text = skolkovo_reason if skolkovo_reason.startswith("⚠️") else f"{skolkovo_emoji} {skolkovo_reason}"
+            # eligible=None: reason уже содержит ⚠️ — не добавляем emoji-префикс
+            comment_text = skolkovo_reason if skolkovo_eligible is None else f"{skolkovo_emoji} {skolkovo_reason}"
             add_comment(page, lead_id, comment_text)
 
             if skolkovo_eligible is True:
@@ -428,7 +429,10 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
                 reject_lead(page, lead_id, "Нецелевой продукт")
                 stats["rejected"]["Нецелевой продукт"] += 1
                 return ("rejected", "Нецелевой продукт")
-            # None → лид остаётся в База
+            else:
+                # eligible=None → тоже переносим в Парсю для ручной проверки
+                move_to_stage(page, lead_id, STAGE_PARSING)
+                stats["moved_to_parsing_uncertain"] += 1
         except AllModelsExhausted:
             _prompt_all_models_failed()   # sets _skolkovo_disabled or raises _StopPipeline
             _pause(0.3, 0.7)
@@ -462,11 +466,12 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def print_stats(stats: dict) -> None:
-    total            = stats["total"]
-    qualified        = stats.get("qualified", 0)
-    moved_to_parsing = stats.get("moved_to_parsing", 0)
-    errors           = stats["errors"]
-    rejected         = stats["rejected"]
+    total                    = stats["total"]
+    qualified                = stats.get("qualified", 0)
+    moved_to_parsing         = stats.get("moved_to_parsing", 0)
+    moved_to_parsing_unc     = stats.get("moved_to_parsing_uncertain", 0)
+    errors                   = stats["errors"]
+    rejected                 = stats["rejected"]
 
     no_kd       = rejected.get(REASON_NO_WEBSITE, 0)
     high_rev    = rejected.get(REASON_TOO_BIG, 0)
@@ -481,7 +486,8 @@ def print_stats(stats: dict) -> None:
         "═" * 55,
         f"  Обработано всего              : {total}",
         f"  → прошли квалификацию          : {qualified}",
-        f"  ✅ перенесено в Парсю          : {moved_to_parsing}",
+        f"  ✅ прошли Сколково → Парсю    : {moved_to_parsing}",
+        f"  ❓ под вопросом → Парсю       : {moved_to_parsing_unc}",
         f"  ❌ Нет КД → Проиграно          : {no_kd}",
         f"  ❌ Интересные, но ярд → Проигр.: {high_rev}",
         f"  ❌ Мало налогов → Проиграно    : {low_tax}",
@@ -557,6 +563,7 @@ def main() -> None:
         "total": 0,
         "qualified": 0,
         "moved_to_parsing": 0,
+        "moved_to_parsing_uncertain": 0,
         "errors": 0,
         "rejected": defaultdict(int),
     }
@@ -744,6 +751,7 @@ def main() -> None:
                         _emit("lead_done", num=lead_num, status=status, name=lead_name, reason=reason,
                               qualified=stats["qualified"],
                               moved_to_parsing=stats["moved_to_parsing"],
+                              moved_to_parsing_uncertain=stats["moved_to_parsing_uncertain"],
                               rejected=sum(stats["rejected"].values()),
                               errors=stats["errors"])
                     _pause(1.5, 2.5)
