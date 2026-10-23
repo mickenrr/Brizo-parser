@@ -158,10 +158,36 @@ def _get_api_session() -> _rlib.Session | None:
     return s
 
 
+def _ensure_user_info() -> None:
+    """Populate user_id/user_name in _api_state if not yet set.
+    Called separately from _ensure_bearer() because when auth goes through
+    Playwright the bearer is captured from browser requests but user_id is never
+    parsed — _ensure_bearer() skips its POST /api/auth on the early-return path."""
+    if _api_state.get("user_id"):
+        return
+    try:
+        r = _rlib.post(
+            _BRIZO_AUTH_URL,
+            json={"email": MY_EMAIL, "password": MY_PASSWORD},
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            _api_state["user_id"] = data.get("id", 0)
+            _api_state["user_name"] = data.get("name", "")
+            if not _api_state.get("bearer") and data.get("token"):
+                _api_state["bearer"] = f"Bearer {data['token']}"
+            log.info("User info fetched: %s (id=%s)",
+                     _api_state["user_name"], _api_state["user_id"])
+    except Exception as e:
+        log.warning("Could not fetch user info from /api/auth: %s", e)
+
+
 def _get_me() -> tuple[int, str]:
     """Return (user_id, user_name) of the authenticated user.
-    Calls _ensure_bearer() if not yet captured; falls back to hardcoded constants."""
-    _ensure_bearer()
+    Falls back to hardcoded constants only if API call fails."""
+    _ensure_user_info()
     uid = _api_state.get("user_id") or MY_USER_ID
     name = _api_state.get("user_name") or MY_NAME
     return (uid, name)
