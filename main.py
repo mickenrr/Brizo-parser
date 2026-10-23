@@ -758,7 +758,7 @@ def main() -> None:
                 finally:
                     if not captcha_hit:
                         _emit("lead_done", num=lead_num, status=status, name=lead_name, reason=reason,
-                              qualified=stats.get("moved_certain", 0) + stats.get("moved_uncertain", 0),
+                              qualified=stats.get("moved_certain", 0) + stats.get("moved_uncertain", 0) + stats.get("moved_to_parsing_uncertain", 0),
                               moved_to_parsing=stats["moved_to_parsing"],
                               moved_to_parsing_uncertain=stats["moved_to_parsing_uncertain"],
                               rejected=sum(stats["rejected"].values()),
