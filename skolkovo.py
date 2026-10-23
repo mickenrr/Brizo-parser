@@ -173,6 +173,9 @@ def set_pw_page(page) -> None:
 def _get_pw_page():
     return _site_pw_page
 
+
+SITE_UNAVAILABLE_REASON = "⚠️ Сайт компании недоступен — невозможно провести проверку. Требуется ручная проверка."
+
 _SYSTEM_PROMPT = """Ты — эксперт по инновационным компаниям. Анализируешь, подходит ли российская компания для резидентства в Сколково.
 
 Критерии Сколково (достаточно ОДНОГО):
@@ -383,6 +386,11 @@ def check_skolkovo(
     """
     website_provided = bool(website and website.strip())
     site_text, site_loaded = _fetch_site_text(website or "")
+
+    if website_provided and (not site_text or len(site_text.split()) < 10):
+        log.info("  Сколково: сайт недоступен или слишком мало текста (%d слов) — пропускаем AI",
+                 len(site_text.split()) if site_text else 0)
+        return (None, SITE_UNAVAILABLE_REASON)
 
     # Сайт "тонкий" — загрузился, но текста < 15 слов (пустая заглушка, редирект на 1 строку)
     site_thin = site_loaded and len((site_text or "").split()) < 15

@@ -45,6 +45,7 @@ from skolkovo import (
     PROVIDERS,
     save_preferred_provider,
     get_current_preferred,
+    SITE_UNAVAILABLE_REASON,
 )
 
 load_dotenv()
@@ -425,14 +426,20 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
             if skolkovo_eligible is True:
                 move_to_stage(page, lead_id, STAGE_PARSING)
                 stats["moved_to_parsing"] += 1
+                stats["moved_certain"] += 1
             elif skolkovo_eligible is False:
                 reject_lead(page, lead_id, "Нецелевой продукт")
                 stats["rejected"]["Нецелевой продукт"] += 1
                 return ("rejected", "Нецелевой продукт")
             else:
-                # eligible=None → тоже переносим в Парсю для ручной проверки
-                move_to_stage(page, lead_id, STAGE_PARSING)
-                stats["moved_to_parsing_uncertain"] += 1
+                # eligible=None: если сайт был недоступен — оставляем в База
+                if skolkovo_reason == SITE_UNAVAILABLE_REASON:
+                    log.info("  Сколково ❓ → остаётся в Базе (сайт недоступен, ручная проверка)")
+                    stats["moved_uncertain"] += 1
+                else:
+                    # Прочие ❓ (datanewton нашёл активы и т.п.) → в Парсю
+                    move_to_stage(page, lead_id, STAGE_PARSING)
+                    stats["moved_to_parsing_uncertain"] += 1
         except AllModelsExhausted:
             _prompt_all_models_failed()   # sets _skolkovo_disabled or raises _StopPipeline
             _pause(0.3, 0.7)
@@ -564,6 +571,8 @@ def main() -> None:
         "qualified": 0,
         "moved_to_parsing": 0,
         "moved_to_parsing_uncertain": 0,
+        "moved_certain": 0,    # eligible=True → Парсю (для _emit)
+        "moved_uncertain": 0,  # eligible=None + сайт недоступен → База
         "errors": 0,
         "rejected": defaultdict(int),
     }
@@ -749,7 +758,7 @@ def main() -> None:
                 finally:
                     if not captcha_hit:
                         _emit("lead_done", num=lead_num, status=status, name=lead_name, reason=reason,
-                              qualified=stats["qualified"],
+                              qualified=stats.get("moved_certain", 0) + stats.get("moved_uncertain", 0),
                               moved_to_parsing=stats["moved_to_parsing"],
                               moved_to_parsing_uncertain=stats["moved_to_parsing_uncertain"],
                               rejected=sum(stats["rejected"].values()),
