@@ -418,7 +418,8 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
                 skolkovo_emoji = "❓"
             log.info("  %s Сколково: %s", skolkovo_emoji, skolkovo_reason)
             _pause(0.3, 0.7)
-            add_comment(page, lead_id, f"{skolkovo_emoji} {skolkovo_reason}")
+            comment_text = skolkovo_reason if skolkovo_reason.startswith("⚠️") else f"{skolkovo_emoji} {skolkovo_reason}"
+            add_comment(page, lead_id, comment_text)
 
             if skolkovo_eligible is True:
                 move_to_stage(page, lead_id, STAGE_PARSING)
