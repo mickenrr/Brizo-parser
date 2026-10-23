@@ -368,15 +368,26 @@ def check_skolkovo(
       None  — недостаточно данных (сайт недоступен, но есть активы по datanewton)
     Raises AllModelsExhausted если все провайдеры упали.
     """
+    website_provided = bool(website and website.strip())
     site_text, site_loaded = _fetch_site_text(website or "")
+
+    # Сайт "тонкий" — загрузился, но текста < 50 слов (заглушка, ошибка, редирект)
+    site_thin = site_loaded and len((site_text or "").split()) < 50
+    site_ok   = site_loaded and not site_thin
 
     datanewton_text, has_assets = _fetch_datanewton(inn or "")
     if datanewton_text:
         log.info("  Сколково datanewton: %s", datanewton_text)
 
-    # Сайт недоступен, но datanewton нашёл активы → вердикт ❓
-    if not site_loaded and has_assets:
+    # Сайт не открылся (или пустой), но datanewton нашёл активы → ❓ без AI
+    if not site_ok and has_assets:
         reason = f"не удалось проанализировать сайт компании, но найдены интеллектуальные активы: {datanewton_text}"
+        log.info("  ❓ Сколково: %s", reason)
+        return (None, reason)
+
+    # Сайт был указан, не открылся (или пустой), datanewton тоже пустой → ❓ без AI
+    if website_provided and not site_ok and not datanewton_text:
+        reason = "⚠️ Сайт компании недоступен — невозможно провести проверку. Требуется ручная проверка."
         log.info("  ❓ Сколково: %s", reason)
         return (None, reason)
 
