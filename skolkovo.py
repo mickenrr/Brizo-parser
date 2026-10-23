@@ -96,6 +96,8 @@ def _call_gemini(system: str, user: str) -> str:
 
 # Each entry: (display_name, api_key_env_var, call_fn(system, user) -> str)
 PROVIDERS: list[tuple[str, str, object]] = [
+    ("OpenRouter / gpt-4o-mini [платный]",       "OPENROUTER_API_KEY",
+     lambda s, u: _call_openrouter("openai/gpt-4o-mini", s, u)),
     ("OpenRouter / gemini-2.0-flash-exp:free",   "OPENROUTER_API_KEY",
      lambda s, u: _call_openrouter("google/gemini-2.0-flash-exp:free", s, u)),
     ("OpenRouter / llama-3.3-70b-instruct:free", "OPENROUTER_API_KEY",
@@ -104,8 +106,6 @@ PROVIDERS: list[tuple[str, str, object]] = [
      lambda s, u: _call_groq(s, u)),
     ("Google Gemini / gemini-1.5-flash",         "GEMINI_API_KEY",
      lambda s, u: _call_gemini(s, u)),
-    ("OpenRouter / gpt-4o-mini [платный]",       "OPENROUTER_API_KEY",
-     lambda s, u: _call_openrouter("openai/gpt-4o-mini", s, u)),
 ]
 
 # Keep for backward compatibility with main.py
