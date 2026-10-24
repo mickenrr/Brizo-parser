@@ -432,14 +432,9 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
                 stats["rejected"]["Нецелевой продукт"] += 1
                 return ("rejected", "Нецелевой продукт")
             else:
-                # eligible=None: если сайт был недоступен — оставляем в База
-                if skolkovo_reason == SITE_UNAVAILABLE_REASON:
-                    log.info("  Сколково ❓ → остаётся в Базе (сайт недоступен, ручная проверка)")
-                    stats["moved_uncertain"] += 1
-                else:
-                    # Прочие ❓ (datanewton нашёл активы и т.п.) → в Парсю
-                    move_to_stage(page, lead_id, STAGE_PARSING)
-                    stats["moved_to_parsing_uncertain"] += 1
+                # eligible=None → всегда остаётся в База для ручной проверки
+                log.info("  Сколково ❓ → остаётся в Базе (ручная проверка)")
+                stats["moved_uncertain"] += 1
         except AllModelsExhausted:
             _prompt_all_models_failed()   # sets _skolkovo_disabled or raises _StopPipeline
             _pause(0.3, 0.7)
