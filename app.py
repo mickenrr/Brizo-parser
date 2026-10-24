@@ -374,6 +374,7 @@ body{
 .c-accent .stat-val{color:var(--accent)}
 .c-green  .stat-val{color:var(--green)}
 .c-red    .stat-val{color:var(--red)}
+.c-yellow .stat-val{color:var(--yellow)}
 .c-muted  .stat-val{color:var(--muted)}
 .progress-wrap{flex:1;padding:0 24px}
 .progress-track{
@@ -419,6 +420,7 @@ body{
   animation:pulse 1s ease-in-out infinite;
 }
 .dot.qualified{background:var(--green)}
+.dot.site_not_found{background:var(--yellow)}
 .dot.rejected{background:var(--red)}
 .dot.error{background:var(--gray)}
 .lead-num{
@@ -433,6 +435,7 @@ body{
   flex-shrink:0;white-space:nowrap;
 }
 .status-qualified{background:rgba(34,212,154,.12);color:var(--green)}
+.status-site_not_found{background:rgba(245,166,35,.12);color:var(--yellow)}
 .status-rejected{background:rgba(240,82,82,.12);color:var(--red)}
 .status-error{background:rgba(58,78,114,.2);color:var(--muted)}
 .status-processing{background:rgba(245,166,35,.12);color:var(--yellow)}
@@ -614,6 +617,10 @@ body{
     <div class="stat-val" id="sv-rejected">0</div>
     <div class="stat-lbl">Проиграно</div>
   </div>
+  <div class="stat c-yellow">
+    <div class="stat-val" id="sv-site-not-found">0</div>
+    <div class="stat-lbl">Сайт не найден</div>
+  </div>
   <div class="stat c-muted">
     <div class="stat-val" id="sv-remaining">{{ limit }}</div>
     <div class="stat-lbl">Осталось</div>
@@ -701,7 +708,7 @@ function _updateControls() {
 const btnPause = document.getElementById('btnPause');
 const btnStop  = document.getElementById('btnStop');
 
-let processed = 0, qualified = 0, rejected = 0, totalFound = LIMIT;
+let processed = 0, qualified = 0, rejected = 0, siteNotFound = 0, totalFound = LIMIT;
 let autoScroll = true;
 let logCount = 0;
 let leadCount = 0;
@@ -711,6 +718,7 @@ const leadsEl  = document.getElementById('leadsEl');
 const logEl    = document.getElementById('logEl');
 const svProc   = document.getElementById('sv-processed');
 const svQual   = document.getElementById('sv-qualified');
+const svSNF    = document.getElementById('sv-site-not-found');
 const svRej    = document.getElementById('sv-rejected');
 const svRem    = document.getElementById('sv-remaining');
 const progFill = document.getElementById('progress');
@@ -728,15 +736,17 @@ logEl.addEventListener('scroll', () => {
   if (!atBottom) autoScroll = false;
 });
 
-function updateStats(q, r, e) {
-  if (q !== undefined) qualified = q;
-  if (r !== undefined) rejected  = r;
-  processed = qualified + rejected + (e || 0);
+function updateStats(q, r, e, snf) {
+  if (q   !== undefined) qualified   = q;
+  if (r   !== undefined) rejected    = r;
+  if (snf !== undefined) siteNotFound = snf;
+  processed = qualified + rejected + siteNotFound + (e || 0);
   const pct = totalFound > 0 ? Math.round(processed / totalFound * 100) : 0;
   const rem = Math.max(0, totalFound - processed);
   svProc.textContent  = `${processed} / ${totalFound}`;
   svQual.textContent  = qualified;
   svRej.textContent   = rejected;
+  svSNF.textContent   = siteNotFound;
   svRem.textContent   = rem;
   progFill.style.width = pct + '%';
   progPct.textContent  = pct + '%';
@@ -788,9 +798,10 @@ function updateLeadCard(num, status, reason) {
 }
 
 function statusLabel(status, reason) {
-  if (status === 'qualified')  return '→ Парсю';
-  if (status === 'processing') return '…';
-  if (status === 'error')      return reason || 'Ошибка';
+  if (status === 'qualified')      return '→ Парсю';
+  if (status === 'site_not_found') return '→ База ❓';
+  if (status === 'processing')     return '…';
+  if (status === 'error')          return reason || 'Ошибка';
   return reason || 'Проиграно';
 }
 
@@ -836,7 +847,7 @@ es.addEventListener('pipeline', function(e) {
 
   if (evt.type === 'lead_done') {
     updateLeadCard(evt.num, evt.status, evt.reason);
-    updateStats(evt.qualified, evt.rejected, evt.errors);
+    updateStats(evt.qualified, evt.rejected, evt.errors, evt.site_not_found);
   }
 
   if (evt.type === 'captcha_detected') {

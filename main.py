@@ -392,6 +392,7 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
         return ("rejected", reason)
 
     stats["qualified"] += 1
+    lead_status = "qualified"  # может смениться на "site_not_found" ниже
 
     # ── f.2. Проверка Сколково/IT-льготы ─────────────────────────────────
     if _skolkovo_disabled:
@@ -435,6 +436,7 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
                 # eligible=None → всегда остаётся в База для ручной проверки
                 log.info("  Сколково ❓ → остаётся в Базе (ручная проверка)")
                 stats["site_not_found"] += 1
+                lead_status = "site_not_found"
         except AllModelsExhausted:
             _prompt_all_models_failed()   # sets _skolkovo_disabled or raises _StopPipeline
             _pause(0.3, 0.7)
@@ -460,7 +462,7 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
         _pause(0.5, 1.0)
         add_lpr_contacts(page, lead_id, lpr_contacts)
 
-    return ("qualified", "")
+    return (lead_status, "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -755,8 +757,7 @@ def main() -> None:
                 finally:
                     if not captcha_hit:
                         _emit("lead_done", num=lead_num, status=status, name=lead_name, reason=reason,
-                              qualified=stats.get("moved_certain", 0) + stats.get("site_not_found", 0),
-                              moved_to_parsing=stats["moved_to_parsing"],
+                              qualified=stats.get("moved_certain", 0),
                               site_not_found=stats["site_not_found"],
                               rejected=sum(stats["rejected"].values()),
                               errors=stats["errors"])
