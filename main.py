@@ -434,7 +434,7 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
             else:
                 # eligible=None → всегда остаётся в База для ручной проверки
                 log.info("  Сколково ❓ → остаётся в Базе (ручная проверка)")
-                stats["moved_uncertain"] += 1
+                stats["site_not_found"] += 1
         except AllModelsExhausted:
             _prompt_all_models_failed()   # sets _skolkovo_disabled or raises _StopPipeline
             _pause(0.3, 0.7)
@@ -468,18 +468,21 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def print_stats(stats: dict) -> None:
-    total                    = stats["total"]
-    qualified                = stats.get("qualified", 0)
-    moved_to_parsing         = stats.get("moved_to_parsing", 0)
-    moved_to_parsing_unc     = stats.get("moved_to_parsing_uncertain", 0)
-    errors                   = stats["errors"]
-    rejected                 = stats["rejected"]
+    total            = stats["total"]
+    qualified        = stats.get("qualified", 0)
+    moved_to_parsing = stats.get("moved_to_parsing", 0)
+    site_not_found   = stats.get("site_not_found", 0)
+    errors           = stats["errors"]
+    rejected         = stats["rejected"]
 
     no_kd       = rejected.get(REASON_NO_WEBSITE, 0)
     high_rev    = rejected.get(REASON_TOO_BIG, 0)
     low_tax     = rejected.get(REASON_LOW_TAX, 0)
     other_rej   = sum(v for k, v in rejected.items()
                       if k not in (REASON_NO_WEBSITE, REASON_TOO_BIG, REASON_LOW_TAX))
+
+    YELLOW = "\033[33m"
+    RESET  = "\033[0m"
 
     lines = [
         "",
@@ -489,7 +492,7 @@ def print_stats(stats: dict) -> None:
         f"  Обработано всего              : {total}",
         f"  → прошли квалификацию          : {qualified}",
         f"  ✅ прошли Сколково → Парсю    : {moved_to_parsing}",
-        f"  ❓ под вопросом → Парсю       : {moved_to_parsing_unc}",
+        f"  {YELLOW}🟡 Сайт не найден → База       : {site_not_found}{RESET}",
         f"  ❌ Нет КД → Проиграно          : {no_kd}",
         f"  ❌ Интересные, но ярд → Проигр.: {high_rev}",
         f"  ❌ Мало налогов → Проиграно    : {low_tax}",
@@ -565,9 +568,8 @@ def main() -> None:
         "total": 0,
         "qualified": 0,
         "moved_to_parsing": 0,
-        "moved_to_parsing_uncertain": 0,
         "moved_certain": 0,    # eligible=True → Парсю (для _emit)
-        "moved_uncertain": 0,  # eligible=None + сайт недоступен → База
+        "site_not_found": 0,   # eligible=None → остаётся в База
         "errors": 0,
         "rejected": defaultdict(int),
     }
@@ -753,9 +755,9 @@ def main() -> None:
                 finally:
                     if not captcha_hit:
                         _emit("lead_done", num=lead_num, status=status, name=lead_name, reason=reason,
-                              qualified=stats.get("moved_certain", 0) + stats.get("moved_uncertain", 0) + stats.get("moved_to_parsing_uncertain", 0),
+                              qualified=stats.get("moved_certain", 0) + stats.get("site_not_found", 0),
                               moved_to_parsing=stats["moved_to_parsing"],
-                              moved_to_parsing_uncertain=stats["moved_to_parsing_uncertain"],
+                              site_not_found=stats["site_not_found"],
                               rejected=sum(stats["rejected"].values()),
                               errors=stats["errors"])
                     _pause(1.5, 2.5)
