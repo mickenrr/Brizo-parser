@@ -751,55 +751,55 @@ def main() -> None:
                     lead_num = total_processed + i + 1
                     lead_name = lead.get("name", f"Lead {lead.get('id')}")
                     _emit("lead_start", num=lead_num, total=total_processed + total_leads, name=lead_name)
-                status, reason = "error", "Ошибка"
-                captcha_hit = False
-                try:
-                    status, reason = process_lead(page, lead, stats)
-                    i += 1
-                except CaptchaDetected:
-                    captcha_hit = True
-                    log.warning("  КАПЧА/БЛОКИРОВКА Checko — ставим парсер на паузу")
-                    _emit("captcha_detected", lead_name=lead_name)
-                    time.sleep(1.5)  # дать SSE-стриму время доставить событие до браузера
-                    pause_event.clear()   # блокируем цикл до команды RESUME от app.py
-                    pause_event.wait()    # ← ждём нажатия кнопки «Продолжить» в браузере
-                    log.info("  Возобновили работу — ждём 30 сек перед повтором лида")
-                    time.sleep(30)
-                    # Не увеличиваем i — повторяем тот же лид
-                except _StopPipeline as exc:
-                    log.warning("Прогон остановлен: %s", exc)
-                    print(f"\n{exc}")
-                    return
-                except PlaywrightTimeout as exc:
-                    log.warning(
-                        "Playwright timeout для лида %s (retry исчерпан): %s",
-                        lead.get("id"), exc,
-                    )
-                    stats["errors"] += 1
-                    status, reason = "error", "Timeout"
-                    i += 1
-                except Exception as exc:
-                    log.error(
-                        "Неожиданная ошибка для лида %s: %s",
-                        lead.get("id"), exc,
-                        exc_info=True,
-                    )
-                    stats["errors"] += 1
                     status, reason = "error", "Ошибка"
-                    i += 1
-                finally:
-                    if not captcha_hit:
-                        _emit("lead_done", num=lead_num, status=status, name=lead_name, reason=reason,
-                              qualified=stats.get("moved_certain", 0),
-                              site_not_found=stats["site_not_found"],
-                              rejected=sum(stats["rejected"].values()),
-                              errors=stats["errors"])
-                    _pause(1.5, 2.5)
+                    captcha_hit = False
+                    try:
+                        status, reason = process_lead(page, lead, stats)
+                        i += 1
+                    except CaptchaDetected:
+                        captcha_hit = True
+                        log.warning("  КАПЧА/БЛОКИРОВКА Checko — ставим парсер на паузу")
+                        _emit("captcha_detected", lead_name=lead_name)
+                        time.sleep(1.5)  # дать SSE-стриму время доставить событие до браузера
+                        pause_event.clear()   # блокируем цикл до команды RESUME от app.py
+                        pause_event.wait()    # ← ждём нажатия кнопки «Продолжить» в браузере
+                        log.info("  Возобновили работу — ждём 30 сек перед повтором лида")
+                        time.sleep(30)
+                        # Не увеличиваем i — повторяем тот же лид
+                    except _StopPipeline as exc:
+                        log.warning("Прогон остановлен: %s", exc)
+                        print(f"\n{exc}")
+                        return
+                    except PlaywrightTimeout as exc:
+                        log.warning(
+                            "Playwright timeout для лида %s (retry исчерпан): %s",
+                            lead.get("id"), exc,
+                        )
+                        stats["errors"] += 1
+                        status, reason = "error", "Timeout"
+                        i += 1
+                    except Exception as exc:
+                        log.error(
+                            "Неожиданная ошибка для лида %s: %s",
+                            lead.get("id"), exc,
+                            exc_info=True,
+                        )
+                        stats["errors"] += 1
+                        status, reason = "error", "Ошибка"
+                        i += 1
+                    finally:
+                        if not captcha_hit:
+                            _emit("lead_done", num=lead_num, status=status, name=lead_name, reason=reason,
+                                  qualified=stats.get("moved_certain", 0),
+                                  site_not_found=stats["site_not_found"],
+                                  rejected=sum(stats["rejected"].values()),
+                                  errors=stats["errors"])
+                        _pause(1.5, 2.5)
 
-                    # Проверяем цель после каждого лида
-                    if target and stats["moved_certain"] >= target:
-                        log.info("  🎯 Цель достигнута: %d лидов в Парсю", stats["moved_certain"])
-                        break
+                        # Проверяем цель после каждого лида
+                        if target and stats["moved_certain"] >= target:
+                            log.info("  🎯 Цель достигнута: %d лидов в Парсю", stats["moved_certain"])
+                            break
 
                 total_processed += i
 
