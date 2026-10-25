@@ -469,7 +469,7 @@ def process_lead(page, lead: dict, stats: dict) -> tuple[str, str]:
 # Statistics output
 # ─────────────────────────────────────────────────────────────────────────────
 
-def print_stats(stats: dict) -> None:
+def print_stats(stats: dict, target: int | None = None) -> None:
     total            = stats["total"]
     qualified        = stats.get("qualified", 0)
     moved_to_parsing = stats.get("moved_to_parsing", 0)
@@ -503,6 +503,12 @@ def print_stats(stats: dict) -> None:
         lines.append(f"  ❌ Иные отказы                 : {other_rej}")
     if errors:
         lines.append(f"  ⚠️  Ошибок (пропущено)          : {errors}")
+    if target:
+        GREEN = "\033[32m"
+        if moved_to_parsing >= target:
+            lines.append(f"  {GREEN}🎯 Цель достигнута: {moved_to_parsing} из {target} лидов в Парсю{RESET}")
+        else:
+            lines.append(f"  {YELLOW}🎯 Цель не достигнута: {moved_to_parsing} из {target} лидов в Парсю{RESET}")
     lines.append("═" * 55)
 
     output = "\n".join(lines)
@@ -546,6 +552,13 @@ def parse_args() -> argparse.Namespace:
         help="Process only the first N leads (useful for testing)",
     )
     parser.add_argument(
+        "--target",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Остановиться после перевода N лидов в Парсю (вместо --limit по входу)",
+    )
+    parser.add_argument(
         "--set-model",
         action="store_true",
         help="Выбрать модель OpenRouter для анализа Сколково и сохранить в конфиг",
@@ -560,10 +573,15 @@ def main() -> None:
         _set_model_interactive()
         return
 
-    limit = args.limit
+    limit  = args.limit
+    target = args.target
 
     log.info("═" * 64)
-    log.info("  СТАРТ ПАЙПЛАЙНА%s", f"  (лимит: {limit})" if limit else "")
+    if target:
+        log.info("  СТАРТ ПАЙПЛАЙНА  (цель: %d лидов в Парсю%s)",
+                 target, f", лимит: {limit}" if limit else "")
+    else:
+        log.info("  СТАРТ ПАЙПЛАЙНА%s", f"  (лимит: {limit})" if limit else "")
     log.info("═" * 64)
 
     stats: dict = {
@@ -695,29 +713,41 @@ def main() -> None:
             log.info("[1] Авторизация в Brizo")
             login(page)
 
-            # ── Шаг 4: получить список новых лидов ───────────────────────
-            log.info("[2] Получаем новые лиды из колонки «База»")
-            leads = get_new_leads(page, max_leads=limit if limit is not None else 9999)
+            # ── Шаги 4–5: получаем и обрабатываем лиды ──────────────────
+            # В режиме --target берём пачками по 50, пока не выполним цель.
+            # В обычном режиме — единственная выборка как раньше.
+            _BATCH = 50
+            total_processed = 0
 
-            if not leads:
-                log.info("Новых лидов не найдено. Завершаем.")
-                return
+            while True:
+                # Определяем сколько запросить в этой пачке
+                if target:
+                    fetch_n = _BATCH
+                    if limit is not None:
+                        fetch_n = min(fetch_n, limit - total_processed)
+                    if fetch_n <= 0:
+                        break
+                else:
+                    fetch_n = limit if limit is not None else 9999
 
-            if limit is not None and len(leads) > limit:
-                leads = leads[:limit]
+                log.info("[2] Получаем новые лиды из колонки «База»")
+                leads = get_new_leads(page, max_leads=fetch_n)
 
-            total_leads = len(leads)
-            log.info("Найдено %d лидов", total_leads)
-            _emit("total", total=total_leads)
+                if not leads:
+                    log.info("Новых лидов не найдено. Завершаем.")
+                    break
 
-            # ── Шаг 5: обрабатываем каждый лид ───────────────────────────
-            log.info("[3] Начинаем обработку")
-            i = 0
-            while i < len(leads):
-                lead = leads[i]
-                lead_num = i + 1
-                lead_name = lead.get("name", f"Lead {lead.get('id')}")
-                _emit("lead_start", num=lead_num, total=total_leads, name=lead_name)
+                total_leads = len(leads)
+                log.info("Найдено %d лидов", total_leads)
+                _emit("total", total=total_processed + total_leads)
+
+                log.info("[3] Начинаем обработку")
+                i = 0
+                while i < len(leads):
+                    lead = leads[i]
+                    lead_num = total_processed + i + 1
+                    lead_name = lead.get("name", f"Lead {lead.get('id')}")
+                    _emit("lead_start", num=lead_num, total=total_processed + total_leads, name=lead_name)
                 status, reason = "error", "Ошибка"
                 captcha_hit = False
                 try:
@@ -763,13 +793,30 @@ def main() -> None:
                               errors=stats["errors"])
                     _pause(1.5, 2.5)
 
+                    # Проверяем цель после каждого лида
+                    if target and stats["moved_certain"] >= target:
+                        log.info("  🎯 Цель достигнута: %d лидов в Парсю", stats["moved_certain"])
+                        break
+
+                total_processed += i
+
+                # Условия выхода из внешнего цикла
+                if not target:
+                    break  # обычный режим — одна выборка
+                if stats["moved_certain"] >= target:
+                    break  # цель выполнена
+                if limit is not None and total_processed >= limit:
+                    log.info("  Достигнут лимит обработанных лидов (%d)", limit)
+                    break
+                # иначе — берём следующую пачку
+
         except Exception as exc:
             log.critical("Критическая ошибка пайплайна: %s", exc, exc_info=True)
         finally:
             browser.close()
 
     # ── Шаг 6: вывести статистику ─────────────────────────────────────────
-    print_stats(stats)
+    print_stats(stats, target=target)
 
 
 if __name__ == "__main__":
