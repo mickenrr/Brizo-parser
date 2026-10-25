@@ -199,8 +199,8 @@ def stream(run_id):
         return Response('data: {}\n\n', status=404, mimetype='text/event-stream')
 
     def _generate():
-        log_idx = 0
-        evt_idx = 0
+        log_idx = int(request.args.get('log_from', 0))
+        evt_idx = int(request.args.get('evt_from', 0))
         cond = run['cond']
         while True:
             with cond:
@@ -876,46 +876,91 @@ function appendLog(text, kind) {
   if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
 }
 
-// SSE
-const es = new EventSource('/stream/' + RUN_ID);
+// SSE с автоматическим переподключением
+let _sseLogIdx = 0;
+let _sseEvtIdx = 0;
+let isDone = false;
 
-es.onmessage = function(e) {
-  const d = JSON.parse(e.data);
-  appendLog(d.t, d.k || 'info');
-  document.getElementById('log-status').textContent = 'работает…';
-};
+function connectSSE() {
+  const es = new EventSource('/stream/' + RUN_ID + '?log_from=' + _sseLogIdx + '&evt_from=' + _sseEvtIdx);
 
-es.addEventListener('pipeline', function(e) {
-  console.log('[SSE] pipeline событие получено:', e.data);
-  let evt;
-  try {
-    evt = JSON.parse(e.data);
-  } catch(err) {
-    console.error('[SSE] ошибка парсинга JSON:', err, e.data);
-    return;
-  }
+  es.onmessage = function(e) {
+    const d = JSON.parse(e.data);
+    appendLog(d.t, d.k || 'info');
+    document.getElementById('log-status').textContent = 'работает…';
+    _sseLogIdx++;
+  };
 
-  if (evt.type === 'total') {
-    totalFound = evt.total;
-    svRem.textContent = totalFound;
-    svProc.textContent = `0 / ${totalFound}`;
-  }
+  es.addEventListener('pipeline', function(e) {
+    console.log('[SSE] pipeline событие получено:', e.data);
+    let evt;
+    try {
+      evt = JSON.parse(e.data);
+    } catch(err) {
+      console.error('[SSE] ошибка парсинга JSON:', err, e.data);
+      _sseEvtIdx++;
+      return;
+    }
 
-  if (evt.type === 'lead_start') {
-    addLeadCard(evt.num, evt.name, 'processing', '');
-  }
+    if (evt.type === 'total') {
+      totalFound = evt.total;
+      svRem.textContent = totalFound;
+      svProc.textContent = `0 / ${totalFound}`;
+    }
 
-  if (evt.type === 'lead_done') {
-    updateLeadCard(evt.num, evt.status, evt.reason);
-    updateStats(evt.qualified, evt.rejected, evt.errors, evt.site_not_found);
-  }
+    if (evt.type === 'lead_start') {
+      addLeadCard(evt.num, evt.name, 'processing', '');
+    }
 
-  if (evt.type === 'captcha_detected') {
-    isPaused = true;
-    _updateControls();
-    document.getElementById('captchaOverlay').classList.add('visible');
-  }
-});
+    if (evt.type === 'lead_done') {
+      updateLeadCard(evt.num, evt.status, evt.reason);
+      updateStats(evt.qualified, evt.rejected, evt.errors, evt.site_not_found);
+    }
+
+    if (evt.type === 'captcha_detected') {
+      isPaused = true;
+      _updateControls();
+      document.getElementById('captchaOverlay').classList.add('visible');
+    }
+
+    _sseEvtIdx++;
+  });
+
+  es.addEventListener('done', function(e) {
+    isDone = true;
+    es.close();
+    isStopped = true;
+    const s = JSON.parse(e.data);
+    badge.className = 'badge done';
+    badge.style.background = '';
+    badge.style.color = '';
+    badgeTxt.textContent = 'Завершено';
+    document.title = 'Brizo Parser — готово';
+    document.getElementById('log-status').textContent = 'завершено';
+    document.getElementById('pulse').style.display = 'none';
+    btnPause.disabled = true;
+    btnStop.disabled  = true;
+    btnPause.style.opacity = '0.4';
+    btnStop.style.opacity  = '0.4';
+    if (s.total) {
+      svProc.textContent = `${s.total} / ${totalFound}`;
+      progFill.style.width = '100%';
+      progPct.textContent = '100%';
+      svRem.textContent = '0';
+    }
+  });
+
+  es.onerror = function() {
+    es.close();
+    if (!isDone) {
+      appendLog('[ПЕРЕПОДКЛЮЧЕНИЕ...]', 'warn');
+      document.getElementById('log-status').textContent = 'переподключение…';
+      setTimeout(connectSSE, 2000);
+    }
+  };
+}
+
+connectSSE();
 
 async function resumeAfterCaptcha() {
   document.getElementById('captchaOverlay').classList.remove('visible');
@@ -924,35 +969,6 @@ async function resumeAfterCaptcha() {
   isPaused = d.paused;
   _updateControls();
 }
-
-es.addEventListener('done', function(e) {
-  es.close();
-  isStopped = true;
-  const s = JSON.parse(e.data);
-  badge.className = 'badge done';
-  badge.style.background = '';
-  badge.style.color = '';
-  badgeTxt.textContent = 'Завершено';
-  document.title = 'Brizo Parser — готово';
-  document.getElementById('log-status').textContent = 'завершено';
-  document.getElementById('pulse').style.display = 'none';
-  btnPause.disabled = true;
-  btnStop.disabled  = true;
-  btnPause.style.opacity = '0.4';
-  btnStop.style.opacity  = '0.4';
-  if (s.total) {
-    svProc.textContent = `${s.total} / ${totalFound}`;
-    progFill.style.width = '100%';
-    progPct.textContent = '100%';
-    svRem.textContent = '0';
-  }
-});
-
-es.onerror = function() {
-  if (es.readyState === EventSource.CLOSED) return;
-  appendLog('[СОЕДИНЕНИЕ ПРЕРВАНО]', 'error');
-  document.getElementById('log-status').textContent = 'ошибка соединения';
-};
 </script>
 </body>
 </html>"""
