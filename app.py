@@ -55,27 +55,53 @@ def index():
 def start():
     email    = request.form.get('email', '').strip()
     password = request.form.get('password', '').strip()
-    try:
-        limit = max(1, min(500, int(request.form.get('limit') or 50)))
-    except ValueError:
-        limit = 50
+    mode     = request.form.get('mode', 'limit')  # 'limit' or 'target'
 
-    session.permanent = True
+    # Собираем аргументы командной строки
+    cmd_args: list[str] = []
+    display_limit = 50  # для шаблона run-страницы
+
+    if mode == 'target':
+        try:
+            target_n = max(1, min(500, int(request.form.get('target') or 10)))
+        except ValueError:
+            target_n = 10
+        cmd_args += ['--target', str(target_n)]
+        display_limit = target_n * 10  # примерная оценка для прогресс-бара
+
+        # Дополнительный лимит входящих лидов (необязательно)
+        try:
+            lim_raw = request.form.get('limit_with_target', '').strip()
+            if lim_raw:
+                limit_t = max(1, min(2000, int(lim_raw)))
+                cmd_args += ['--limit', str(limit_t)]
+                display_limit = limit_t
+        except ValueError:
+            pass
+    else:
+        try:
+            limit = max(1, min(500, int(request.form.get('limit') or 50)))
+        except ValueError:
+            limit = 50
+        cmd_args += ['--limit', str(limit)]
+        display_limit = limit
+
+    session.permanent   = True
     session['email']    = email
     session['password'] = password
-    session['limit']    = limit
+    session['limit']    = display_limit
 
     run_id = uuid.uuid4().hex[:10]
     cond = threading.Condition()
     run = {'lines': [], 'events': [], 'done': False, 'paused': False,
-           'proc': None, 'cond': cond, 'limit': limit}
+           'proc': None, 'cond': cond, 'limit': display_limit}
     _runs[run_id] = run
 
     def _worker():
         env = {**os.environ, 'BRIZO_EMAIL': email, 'BRIZO_PASSWORD': password}
         try:
             proc = subprocess.Popen(
-                ['python3', 'main.py', '--limit', str(limit)],
+                ['python3', 'main.py'] + cmd_args,
                 cwd=PARSER_DIR, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 stdin=subprocess.PIPE,
@@ -261,6 +287,15 @@ input:focus{border-color:var(--accent)}
      background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px;padding:4px}
 .sep{border:none;border-top:1px solid var(--border);margin:24px 0}
 .help{font-size:11px;color:var(--muted);margin-top:5px}
+.mode-toggle{display:flex;gap:0;border:1.5px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px}
+.mode-toggle label{
+  flex:1;text-align:center;padding:8px 0;font-size:12px;font-weight:700;
+  letter-spacing:.04em;text-transform:uppercase;cursor:pointer;
+  color:var(--muted);background:var(--input);transition:background .15s,color .15s;
+}
+.mode-toggle input[type=radio]{display:none}
+.mode-toggle input[type=radio]:checked+label{background:var(--accent);color:#fff}
+.mode-extra{margin-top:12px}
 .btn{
   width:100%;padding:13px;background:var(--accent);color:#fff;
   border:none;border-radius:9px;font-size:15px;font-weight:700;cursor:pointer;
@@ -290,15 +325,40 @@ input:focus{border-color:var(--accent)}
     </div>
     <hr class="sep">
     <div class="field">
-      <label>Количество лидов</label>
-      <input type="number" name="limit" value="{{ limit }}" min="1" max="500">
-      <div class="help">Из колонки «База» · максимум 500</div>
+      <label>Режим остановки</label>
+      <div class="mode-toggle">
+        <input type="radio" name="mode" id="mode-limit" value="limit" checked>
+        <label for="mode-limit">Лимит</label>
+        <input type="radio" name="mode" id="mode-target" value="target">
+        <label for="mode-target">Цель</label>
+      </div>
+
+      <div id="block-limit">
+        <input type="number" name="limit" id="inp-limit" value="{{ limit }}" min="1" max="500">
+        <div class="help">Обработать N лидов из Базы</div>
+      </div>
+
+      <div id="block-target" style="display:none">
+        <input type="number" name="target" id="inp-target" value="10" min="1" max="500">
+        <div class="help">Остановиться после N лидов в Парсю</div>
+        <div class="mode-extra">
+          <label style="margin-top:12px">Макс. лидов (необяз.)</label>
+          <input type="number" name="limit_with_target" id="inp-limit-t" value="" min="1" max="2000" placeholder="без ограничения">
+          <div class="help">Дополнительный лимит входящих лидов</div>
+        </div>
+      </div>
     </div>
     <button type="submit" class="btn">
       <svg viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg>
       Запустить
     </button>
   </form>
+  <script>
+  document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', function(){
+    document.getElementById('block-limit').style.display  = this.value === 'limit'  ? '' : 'none';
+    document.getElementById('block-target').style.display = this.value === 'target' ? '' : 'none';
+  }));
+  </script>
 </div>
 </body>
 </html>"""
