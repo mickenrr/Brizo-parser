@@ -198,9 +198,12 @@ def stream(run_id):
     if not run:
         return Response('data: {}\n\n', status=404, mimetype='text/event-stream')
 
+    log_from = int(request.args.get('log_from', 0))
+    evt_from = int(request.args.get('evt_from', 0))
+
     def _generate():
-        log_idx = int(request.args.get('log_from', 0))
-        evt_idx = int(request.args.get('evt_from', 0))
+        log_idx = log_from
+        evt_idx = evt_from
         cond = run['cond']
         while True:
             with cond:
