@@ -15,7 +15,10 @@ import requests
 
 def _emit(event_type: str, **kwargs) -> None:
     """Print a structured pipeline event line for the web UI."""
-    print(f"PIPELINE_EVENT:{_json.dumps({'type': event_type, **kwargs})}", flush=True)
+    try:
+        print(f"PIPELINE_EVENT:{_json.dumps({'type': event_type, **kwargs})}", flush=True)
+    except (BlockingIOError, OSError):
+        pass  # браузер не читает — пропускаем событие, не падаем
 
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
