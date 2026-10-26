@@ -528,9 +528,16 @@ def _resolve_url(inn: str) -> str | None:
                 pass
             # Ждём появления ссылки на компанию в DOM (SPA подгружает результаты async)
             try:
-                page.wait_for_selector('a[href*="/company/"]', timeout=8_000)
+                page.wait_for_selector('a[href*="/company/"]', timeout=15_000)
+                print(f"[checko] wait_for_selector: found")
             except Exception:
-                pass
+                print(f"[checko] wait_for_selector: timeout after 15s — url={page.url[:80]}")
+                try:
+                    inn_from_url = target_url.split("=")[-1].split("&")[0]
+                    page.screenshot(path=f"/tmp/checko_{inn_from_url}.png", full_page=True)
+                    print(f"[checko] screenshot → /tmp/checko_{inn_from_url}.png")
+                except Exception as se:
+                    print(f"[checko] screenshot failed: {se}")
             # Проверяем: не показывает ли Checko капчу Яндекс SmartCaptcha
             try:
                 html = page.content()
