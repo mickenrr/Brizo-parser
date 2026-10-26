@@ -486,7 +486,8 @@ def _resolve_url(inn: str) -> str | None:
     def _company_url_from_page() -> str | None:
         """
         After navigation: if Checko redirected to a company page → return it.
-        Otherwise find first /company/ link in search results via JS.
+        Otherwise find first /company/<slug> link (exactly 2 path segments,
+        no sub-pages like /taxes, /management, /founders, etc.).
         """
         current = page.url or ""
         if "/company/" in current and "?q=" not in current and "/search" not in current:
@@ -497,11 +498,14 @@ def _resolve_url(inn: str) -> str | None:
             links = page.evaluate("""() => {
                 return Array.from(document.querySelectorAll('a[href*="/company/"]'))
                     .filter(a => {
-                        const h = a.href || '';
-                        return !h.includes('/select') && !h.includes('/updates')
-                            && !h.includes('/edit') && !h.includes('/contacts')
-                            && !h.includes('/details') && !h.includes('/finances')
-                            && !h.includes('/activity');
+                        try {
+                            const u = new URL(a.href);
+                            const parts = u.pathname.split('/').filter(Boolean);
+                            // Only /company/<slug> — exactly 2 segments, no sub-pages
+                            if (parts.length !== 2 || parts[0] !== 'company') return false;
+                            const slug = parts[1];
+                            return slug !== 'select' && slug !== 'updates' && !slug.startsWith('select?');
+                        } catch(e) { return false; }
                     })
                     .map(a => a.href);
             }""")
@@ -520,6 +524,11 @@ def _resolve_url(inn: str) -> str | None:
             page.goto(target_url, timeout=30_000, wait_until="domcontentloaded")
             try:
                 page.wait_for_load_state("networkidle", timeout=8_000)
+            except Exception:
+                pass
+            # Ждём появления ссылки на компанию в DOM (SPA подгружает результаты async)
+            try:
+                page.wait_for_selector('a[href*="/company/"]', timeout=8_000)
             except Exception:
                 pass
             # Проверяем: не показывает ли Checko капчу Яндекс SmartCaptcha
