@@ -479,7 +479,7 @@ def _resolve_url(inn: str) -> str | None:
     1. Navigate to /?q={INN} — wait networkidle — check redirect / find link
     2. Navigate to /search?query={INN} — same logic (fallback)
     """
-    _SKIP = ("/select", "/updates", "/edit", "/contacts", "/details", "/finances", "/activity")
+    _SKIP = ("/select", "/updates", "/edit", "/contacts", "/details", "/finances", "/activity", "/timeline")
 
     page = _get_pw_page()
 
@@ -539,16 +539,16 @@ def _resolve_url(inn: str) -> str | None:
 
     print(f"[checko] ищем по ИНН {inn}")
 
-    # ── 1. Основной: /?q={INN} ───────────────────────────────────────────────
-    found = _goto_and_find(f"{BASE_URL}/?q={inn}")
+    # ── 1. Основной: /search?query={INN} — стабильный редирект на страницу компании ──
+    found = _goto_and_find(f"{BASE_URL}/search?query={inn}")
     if _request_blocked:
         return None  # Капча — не пробуем второй URL
     if found:
         print(f"[checko] INN {inn} → {found}")
         return found
 
-    # ── 2. Запасной: /search?query={INN} ─────────────────────────────────────
-    found = _goto_and_find(f"{BASE_URL}/search?query={inn}")
+    # ── 2. Запасной: /?q={INN} ───────────────────────────────────────────────
+    found = _goto_and_find(f"{BASE_URL}/?q={inn}")
     if found:
         print(f"[checko] INN {inn} → {found}")
         return found
