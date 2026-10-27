@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import uuid
 from flask import Flask, Response, jsonify, redirect, render_template_string, request, session
@@ -101,7 +102,7 @@ def start():
         env = {**os.environ, 'BRIZO_EMAIL': email, 'BRIZO_PASSWORD': password}
         try:
             proc = subprocess.Popen(
-                ['python3', 'main.py'] + cmd_args,
+                [sys.executable, 'main.py'] + cmd_args,
                 cwd=PARSER_DIR, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 stdin=subprocess.PIPE,
@@ -143,6 +144,8 @@ def _send_signal(run_id: str, sig: int) -> bool:
     proc = run.get('proc') if run else None
     if not proc or run.get('done'):
         return False
+    if sys.platform == 'win32':
+        return False  # SIGSTOP/SIGCONT not supported on Windows
     try:
         os.killpg(os.getpgid(proc.pid), sig)
         return True
@@ -152,6 +155,8 @@ def _send_signal(run_id: str, sig: int) -> bool:
 
 @app.route('/pause/<run_id>', methods=['POST'])
 def pause_run(run_id):
+    if sys.platform == 'win32':
+        return jsonify(ok=False, paused=False, message='Пауза недоступна на Windows')
     ok = _send_signal(run_id, signal.SIGSTOP)
     if ok and run_id in _runs:
         _runs[run_id]['paused'] = True
@@ -160,7 +165,8 @@ def pause_run(run_id):
 
 @app.route('/resume/<run_id>', methods=['POST'])
 def resume_run(run_id):
-    _send_signal(run_id, signal.SIGCONT)  # на случай ручной паузы через SIGSTOP
+    if sys.platform != 'win32':
+        _send_signal(run_id, signal.SIGCONT)  # снять паузу через SIGSTOP (не Windows)
     run = _runs.get(run_id)
     proc = run.get('proc') if run else None
     if run_id in _runs:
@@ -179,14 +185,20 @@ def stop_run(run_id):
     run = _runs.get(run_id)
     proc = run.get('proc') if run else None
     if proc and not run.get('done'):
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGCONT)  # снять паузу, иначе SIGTERM не дойдёт
-        except Exception:
-            pass
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except Exception:
-            pass
+        if sys.platform == 'win32':
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGCONT)  # снять паузу, иначе SIGTERM не дойдёт
+            except Exception:
+                pass
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except Exception:
+                pass
         if run_id in _runs:
             _runs[run_id]['paused'] = False
     return jsonify(ok=True)

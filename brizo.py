@@ -483,9 +483,9 @@ def login(page: Page, email: str = MY_EMAIL, password: str = MY_PASSWORD) -> Non
     page.locator('button[type="submit"]').click()
 
     log.info("Waiting for post-login navigation...")
-    # Detect auth error quickly (wrong credentials) before hitting the 60s timeout
+    # Detect auth error quickly (wrong credentials) before hitting the full timeout
     try:
-        page.wait_for_url(lambda url: "/cabinet/" in url and "login" not in url, timeout=8_000)
+        page.wait_for_url(lambda url: "/cabinet/" in url and "login" not in url, timeout=60_000)
     except PlaywrightTimeout:
         # Check if there's a visible error message on the login page
         error_sel = ".error, .alert, [class*='error'], [class*='Error'], [class*='alert']"
@@ -494,19 +494,18 @@ def login(page: Page, email: str = MY_EMAIL, password: str = MY_PASSWORD) -> Non
             err_text = err_el.text_content(timeout=1_000) or ""
         except Exception:
             err_text = ""
-        if err_text.strip():
+        # Ignore field labels like "Email *" or "Пароль:" — they're not real errors
+        import re as _re
+        is_field_label = bool(_re.search(r'[\*\:]\s*$', err_text.strip()))
+        if err_text.strip() and not is_field_label:
             raise RuntimeError(f"Ошибка входа в Brizo: «{err_text.strip()[:120]}»")
-        # No error message — keep waiting the full timeout
         try:
-            page.wait_for_url(lambda url: "/cabinet/" in url and "login" not in url, timeout=52_000)
-        except PlaywrightTimeout:
-            try:
-                page.screenshot(path="/tmp/brizo_login_fail.png")
-            except Exception:
-                pass
-            raise TimeoutError(
-                f"Войти в Brizo не удалось за 60с. Проверьте email и пароль. (URL: {page.url})"
-            )
+            page.screenshot(path="/tmp/brizo_login_fail.png")
+        except Exception:
+            pass
+        raise TimeoutError(
+            f"Войти в Brizo не удалось за 60с. Проверьте email и пароль. (URL: {page.url})"
+        )
 
     log.info("Logged in at %s", page.url)
     # After login the SPA redirects /cabinet/ → /cabinet/deals which destroys
