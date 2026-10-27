@@ -476,9 +476,9 @@ def login(page: Page, email: str = MY_EMAIL, password: str = MY_PASSWORD) -> Non
     page.wait_for_selector('input[type="email"]', timeout=LONG)
 
     page.locator('input[type="email"]').fill(email)
-    page.wait_for_timeout(800)
+    page.wait_for_timeout(1500)
     page.locator('input[type="password"]').fill(password)
-    page.wait_for_timeout(800)
+    page.wait_for_timeout(1500)
 
     # Verify fields are actually filled (React race condition on Windows)
     email_val = page.locator('input[type="email"]').input_value()
@@ -493,7 +493,7 @@ def login(page: Page, email: str = MY_EMAIL, password: str = MY_PASSWORD) -> Non
 
     # Wait for submit button to be enabled, log its text, then click
     page.wait_for_selector('button[type="submit"]', state='visible', timeout=10_000)
-    page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=10_000)
+    page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=30_000)
     btn = page.locator('button[type="submit"]')
     try:
         btn_text = btn.text_content(timeout=2_000) or ""
