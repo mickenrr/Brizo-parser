@@ -476,7 +476,20 @@ def login(page: Page, email: str = MY_EMAIL, password: str = MY_PASSWORD) -> Non
     page.wait_for_selector('input[type="email"]', timeout=LONG)
 
     page.locator('input[type="email"]').fill(email)
+    page.wait_for_timeout(800)
     page.locator('input[type="password"]').fill(password)
+    page.wait_for_timeout(800)
+
+    # Verify fields are actually filled (React race condition on Windows)
+    email_val = page.locator('input[type="email"]').input_value()
+    pwd_val   = page.locator('input[type="password"]').input_value()
+    log.info("Fields filled — email len=%d, password len=%d", len(email_val), len(pwd_val))
+    if len(email_val) == 0:
+        page.locator('input[type="email"]').type(email)
+        page.wait_for_timeout(500)
+    if len(pwd_val) == 0:
+        page.locator('input[type="password"]').type(password)
+        page.wait_for_timeout(500)
 
     # Wait for submit button to be enabled, log its text, then click
     page.wait_for_selector('button[type="submit"]', state='visible', timeout=10_000)
@@ -498,6 +511,7 @@ def login(page: Page, email: str = MY_EMAIL, password: str = MY_PASSWORD) -> Non
     except Exception:
         pass
     log.info("URL after networkidle: %s", page.url)
+    page.screenshot(path="C:/parser/login_debug.png")
 
     log.info("Waiting for post-login navigation...")
     # Detect auth error quickly (wrong credentials) before hitting the full timeout
