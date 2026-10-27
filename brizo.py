@@ -37,8 +37,8 @@ MY_EMAIL    = os.getenv("BRIZO_EMAIL", "")
 MY_PASSWORD = os.getenv("BRIZO_PASSWORD", "")
 
 RESPONSIBLE  = "Серафим Саровский"
-MY_NAME      = "Ника Серафимова"   # the user running the pipeline
-MY_USER_ID   = 50738               # Brizo user ID for serafimovanika@gmail.com
+MY_NAME      = ""    # filled after login() via _ensure_user_info()
+MY_USER_ID   = 0    # filled after login() via _ensure_user_info()
 BASE_COLUMN  = "База"
 BASE_STATUS_ID = 157659            # Kanban stage ID for «База»
 SKIP_PREFIXES = ("Входящий звонок", "Исходящий звонок")
@@ -532,7 +532,13 @@ def login(page: Page, email: str = MY_EMAIL, password: str = MY_PASSWORD) -> Non
         page.goto(f"{BRIZO_URL}/cabinet/deals", timeout=TIMEOUT, wait_until="domcontentloaded")
     time.sleep(1.5)
     _wait_for_kanban(page)
-    log.info("Login complete")
+
+    # Fetch user ID and name from the API now that we have a valid session
+    _ensure_user_info()
+    global MY_USER_ID, MY_NAME
+    MY_USER_ID = _api_state.get("user_id") or MY_USER_ID
+    MY_NAME    = _api_state.get("user_name") or MY_NAME
+    log.info("Login complete — user: %s (id=%s)", MY_NAME, MY_USER_ID)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
