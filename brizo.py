@@ -478,9 +478,26 @@ def login(page: Page, email: str = MY_EMAIL, password: str = MY_PASSWORD) -> Non
     page.locator('input[type="email"]').fill(email)
     page.locator('input[type="password"]').fill(password)
 
-    # Wait for submit button to be clickable, then submit
+    # Wait for submit button to be enabled, log its text, then click
+    page.wait_for_selector('button[type="submit"]', state='visible', timeout=10_000)
     page.wait_for_selector('button[type="submit"]:not([disabled])', timeout=10_000)
-    page.locator('button[type="submit"]').click()
+    btn = page.locator('button[type="submit"]')
+    try:
+        btn_text = btn.text_content(timeout=2_000) or ""
+        log.info("Submit button found: «%s»", btn_text.strip())
+    except Exception:
+        log.info("Submit button found (text unavailable)")
+    btn.click()
+
+    # Give the browser a moment then log the URL to confirm something happened
+    import time as _time
+    _time.sleep(2)
+    log.info("URL 2s after click: %s", page.url)
+    try:
+        page.wait_for_load_state("networkidle", timeout=10_000)
+    except Exception:
+        pass
+    log.info("URL after networkidle: %s", page.url)
 
     log.info("Waiting for post-login navigation...")
     # Detect auth error quickly (wrong credentials) before hitting the full timeout
